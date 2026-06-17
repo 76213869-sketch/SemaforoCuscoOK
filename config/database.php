@@ -1,56 +1,14 @@
 <?php
-// Configuración de base de datos MySQL con soporte de entorno Railway y fallback local
+// Configuración de base de datos MySQL con soporte de entorno Railway
 
-if (!function_exists('getRailwayEnv')) {
-    /**
-     * Obtiene de forma robusta una variable de entorno, buscando en getenv(),
-     * $_ENV, $_SERVER y leyendo directamente /proc/self/environ en entornos Linux.
-     */
-    function getRailwayEnv($key) {
-        // 1. Intentar getenv()
-        $val = getenv($key);
-        if ($val !== false && $val !== '') {
-            return $val;
-        }
-        // 2. Intentar $_ENV
-        if (isset($_ENV[$key]) && $_ENV[$key] !== '') {
-            return $_ENV[$key];
-        }
-        // 3. Intentar $_SERVER
-        if (isset($_SERVER[$key]) && $_SERVER[$key] !== '') {
-            return $_SERVER[$key];
-        }
-        
-        // 4. Fallback extremo: Leer /proc/self/environ en Linux (para evadir clear_env = yes en PHP-FPM)
-        static $procEnv = null;
-        if ($procEnv === null) {
-            $procEnv = [];
-            if (strtoupper(substr(PHP_OS, 0, 3)) !== 'WIN' && @file_exists('/proc/self/environ')) {
-                $data = @file_get_contents('/proc/self/environ');
-                if ($data) {
-                    $parts = explode("\0", $data);
-                    foreach ($parts as $part) {
-                        if (strpos($part, '=') !== false) {
-                            list($k, $v) = explode('=', $part, 2);
-                            $procEnv[$k] = $v;
-                        }
-                    }
-                }
-            }
-        }
-        
-        return $procEnv[$key] ?? null;
-    }
-}
+// Resolver las variables del entorno de Railway exclusivamente usando getenv()
+$host = getenv('MYSQLHOST');
+$port = getenv('MYSQLPORT');
+$dbname = getenv('MYSQLDATABASE');
+$user = getenv('MYSQLUSER');
+$password = getenv('MYSQLPASSWORD');
 
-// Resolver las variables del entorno de Railway exclusivamente
-$host = getRailwayEnv('MYSQLHOST');
-$port = getRailwayEnv('MYSQLPORT');
-$dbname = getRailwayEnv('MYSQLDATABASE');
-$user = getRailwayEnv('MYSQLUSER');
-$password = getRailwayEnv('MYSQLPASSWORD');
-
-$is_railway = ($host !== null && $host !== '');
+$is_railway = ($host !== null && $host !== false && $host !== '');
 
 // Definición de constantes para compatibilidad con el resto del proyecto
 if (!defined('DB_HOST')) define('DB_HOST', $host);
@@ -69,15 +27,15 @@ if (!defined('DB_IS_RAILWAY')) define('DB_IS_RAILWAY', $is_railway);
 function getDatabaseConnection() {
     try {
         // Log environment variables before connection attempt
-        $rawHost = getRailwayEnv('MYSQLHOST');
-        $rawPort = getRailwayEnv('MYSQLPORT');
-        $rawDb = getRailwayEnv('MYSQLDATABASE');
-        $rawUser = getRailwayEnv('MYSQLUSER');
-        $rawPass = getRailwayEnv('MYSQLPASSWORD');
+        $rawHost = getenv('MYSQLHOST');
+        $rawPort = getenv('MYSQLPORT');
+        $rawDb = getenv('MYSQLDATABASE');
+        $rawUser = getenv('MYSQLUSER');
+        $rawPass = getenv('MYSQLPASSWORD');
         
         error_log("[PDO ATTEMPT] DSN: mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME);
         error_log("[PDO ATTEMPT] DB_USER: " . DB_USER);
-        error_log("[PDO ATTEMPT] Raw Env Values - MYSQLHOST: " . ($rawHost ?? 'NULL') . ", MYSQLPORT: " . ($rawPort ?? 'NULL') . ", MYSQLDATABASE: " . ($rawDb ?? 'NULL') . ", MYSQLUSER: " . ($rawUser ?? 'NULL') . ", MYSQLPASSWORD: " . ($rawPass !== null ? 'DEFINED' : 'NULL'));
+        error_log("[PDO ATTEMPT] Raw Env Values - MYSQLHOST: " . ($rawHost !== false ? $rawHost : 'NULL') . ", MYSQLPORT: " . ($rawPort !== false ? $rawPort : 'NULL') . ", MYSQLDATABASE: " . ($rawDb !== false ? $rawDb : 'NULL') . ", MYSQLUSER: " . ($rawUser !== false ? $rawUser : 'NULL') . ", MYSQLPASSWORD: " . ($rawPass !== false ? 'DEFINED' : 'NULL'));
 
         $dsn = "mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=utf8mb4";
         $pdo = new PDO($dsn, DB_USER, DB_PASS, [
@@ -194,11 +152,11 @@ function getDatabaseConnection() {
      } catch (PDOException $e) {
         // Diagnóstico detallado si falla la conexión
         $envState = [
-            'MYSQLHOST' => (getRailwayEnv('MYSQLHOST') !== null) ? 'DETECTADA (' . getRailwayEnv('MYSQLHOST') . ')' : 'NO_DETECTADA',
-            'MYSQLPORT' => (getRailwayEnv('MYSQLPORT') !== null) ? 'DETECTADA (' . getRailwayEnv('MYSQLPORT') . ')' : 'NO_DETECTADA',
-            'MYSQLDATABASE' => (getRailwayEnv('MYSQLDATABASE') !== null) ? 'DETECTADA (' . getRailwayEnv('MYSQLDATABASE') . ')' : 'NO_DETECTADA',
-            'MYSQLUSER' => (getRailwayEnv('MYSQLUSER') !== null) ? 'DETECTADA (' . getRailwayEnv('MYSQLUSER') . ')' : 'NO_DETECTADA',
-            'MYSQLPASSWORD' => (getRailwayEnv('MYSQLPASSWORD') !== null) ? 'DETECTADA (MASCARADA)' : 'NO_DETECTADA'
+            'MYSQLHOST' => (getenv('MYSQLHOST') !== false) ? 'DETECTADA (' . getenv('MYSQLHOST') . ')' : 'NO_DETECTADA',
+            'MYSQLPORT' => (getenv('MYSQLPORT') !== false) ? 'DETECTADA (' . getenv('MYSQLPORT') . ')' : 'NO_DETECTADA',
+            'MYSQLDATABASE' => (getenv('MYSQLDATABASE') !== false) ? 'DETECTADA (' . getenv('MYSQLDATABASE') . ')' : 'NO_DETECTADA',
+            'MYSQLUSER' => (getenv('MYSQLUSER') !== false) ? 'DETECTADA (' . getenv('MYSQLUSER') . ')' : 'NO_DETECTADA',
+            'MYSQLPASSWORD' => (getenv('MYSQLPASSWORD') !== false) ? 'DETECTADA (MASCARADA)' : 'NO_DETECTADA'
         ];
         
         $diagMsg = "\n[DIAGNÓSTICO TEMPORAL DE CONEXIÓN]:\n";
@@ -238,6 +196,7 @@ function feToDbEstado($estado) {
     }
 }
 
+// Helpers adicionales
 function dbToFeAlertaTipo($tipo) {
     switch ($tipo) {
         case 'INFORMATIVA': return 'informativa';
@@ -261,16 +220,10 @@ function feToDbAlertaTipo($tipo) {
  */
 function registrarBitacora($pdo, $accion, $descripcion, $usuario_id = 1) {
     try {
-        // Log to historial_cambios (tabla original)
         $stmt = $pdo->prepare("INSERT INTO historial_cambios (usuario_id, accion, descripcion) VALUES (?, ?, ?)");
         $stmt->execute([$usuario_id, $accion, $descripcion]);
-
-        // Mapear y registrar en actividad_sistema
-        // [DESACTIVADO]: Para evitar duplicaciones ya que todos los controladores llaman ahora directamente a registrarActividadSistema()
-        // registrarActividadSistema($pdo, $modulo, $moduloAccion, $descripcion, $usuario);
-
     } catch (Exception $e) {
-        // Ignorar silenciosamente
+        // Ignorar
     }
 }
 
@@ -282,7 +235,7 @@ function registrarActividadSistema($pdo, $modulo, $accion, $descripcion, $usuari
         $stmt = $pdo->prepare("INSERT INTO actividad_sistema (usuario, modulo, accion, descripcion) VALUES (?, ?, ?, ?)");
         $stmt->execute([$usuario, $modulo, $accion, $descripcion]);
     } catch (Exception $e) {
-        // Ignorar o logear silenciosamente
+        // Ignorar
     }
 }
 
@@ -308,4 +261,3 @@ function validarAccesoAPI($rolesPermitidos) {
         exit;
     }
 }
-
