@@ -1,4 +1,6 @@
 <?php
+
 header('Content-Type: text/plain');
 
-echo getenv('PRUEBA');
+echo "PRUEBA=";
+var_dump(getenv('PRUEBA'));
