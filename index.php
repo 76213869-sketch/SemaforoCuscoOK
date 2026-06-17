@@ -1,0 +1,2351 @@
+<?php
+session_start();
+if (!isset($_SESSION['usuario_id'])) {
+    header("Location: login.php");
+    exit;
+}
+require_once __DIR__ . '/config/database.php';
+$usuario_id = $_SESSION['usuario_id'] ?? null;
+
+$pdo = getDatabaseConnection();
+$stmtUser = $pdo->prepare("SELECT nombre, rol, foto_perfil FROM usuarios WHERE id = ? LIMIT 1");
+$stmtUser->execute([$usuario_id]);
+$dbUser = $stmtUser->fetch();
+
+$usuario_rol = $dbUser['rol'] ?? 'INVITADO';
+$usuario_nombre = $dbUser['nombre'] ?? 'Invitado';
+$usuario_foto = $dbUser['foto_perfil'] ?? null;
+
+// Calcular iniciales
+$words = explode(" ", $usuario_nombre);
+$initials = "";
+foreach ($words as $w) {
+    $initials .= isset($w[0]) ? strtoupper($w[0]) : '';
+}
+$usuario_iniciales = substr($initials ?: 'U', 0, 2);
+?>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Semáforo Hídrico Inteligente - Cusco</title>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Leaflet.js CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <!-- Personal CSS -->
+    <link rel="stylesheet" href="assets/css/styles.css?v=1.0.2">
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Leaflet.js CDN -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <!-- Leaflet.heat Plugin CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+    <!-- jsPDF CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body data-user-id="<?php echo (int)$usuario_id; ?>">
+
+    <!-- PANTALLA DE CARGA INICIAL (LOADING SCREEN) -->
+    <div id="loading-screen" class="loading-screen">
+        <div class="loading-content">
+            <div class="loading-logo-wrapper">
+                <div class="water-drop-loader">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M12 22a7 7 0 0 0 7-7c0-4.3-7-11-7-11S5 10.7 5 15a7 7 0 0 0 7 7z"/>
+                    </svg>
+                </div>
+                <div class="water-ripple-ring"></div>
+            </div>
+            <h1 class="loading-title">Semáforo Hídrico</h1>
+            <p class="loading-subtitle" id="loading-subtitle">Iniciando sistema de monitoreo...</p>
+            <div class="loading-progress-bar-container">
+                <div class="loading-progress-bar" id="loading-progress-bar"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="app-container">
+        <!-- BARRA LATERAL (SIDEBAR) -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-logo">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 22a7 7 0 0 0 7-7c0-4.3-7-11-7-11S5 10.7 5 15a7 7 0 0 0 7 7z"/>
+                        <path d="M12 18.5a3.5 3.5 0 0 0 3.5-3.5" stroke-dasharray="3 3"/>
+                    </svg>
+                </div>
+                <div class="brand-info">
+                    <h1>Semáforo Hídrico</h1>
+                    <span class="brand-location">Viva el Perú - Cusco</span>
+                </div>
+                <!-- BOTÓN DE CERRAR SIDEBAR EN MÓVILES -->
+                <button class="mobile-close-sidebar" id="mobile-close-sidebar" aria-label="Cerrar Menú">&times;</button>
+            </div>
+            
+            <nav class="sidebar-menu">
+                <ul>
+                    <li class="menu-item active" data-tab="dashboard">
+                        <a href="#dashboard">
+                            <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="3" y="3" width="7" height="9" rx="1" />
+                                <rect x="14" y="3" width="7" height="5" rx="1" />
+                                <rect x="14" y="12" width="7" height="9" rx="1" />
+                                <rect x="3" y="16" width="7" height="5" rx="1" />
+                            </svg>
+                            <span>Dashboard</span>
+                        </a>
+                    </li>
+                    <?php if ($usuario_rol === 'ADMINISTRADOR' || $usuario_rol === 'OPERADOR'): ?>
+                    <li class="menu-item" data-tab="registrar">
+                        <a href="#registrar">
+                            <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 20h9"/>
+                                <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+                            </svg>
+                            <span>Registrar Análisis</span>
+                        </a>
+                    </li>
+                    <?php endif; ?>
+                    <li class="menu-item" data-tab="mapa">
+                        <a href="#mapa">
+                            <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 6l6-3 10 5 2-1v15l-8 4-8-5Z"/>
+                                <path d="M9 3v15"/>
+                                <path d="M15 8v15"/>
+                            </svg>
+                            <span>Mapa Comunitario</span>
+                        </a>
+                    </li>
+                    <?php if ($usuario_rol === 'ADMINISTRADOR' || $usuario_rol === 'OPERADOR'): ?>
+                    <li class="menu-item" data-tab="alertas">
+                        <a href="#alertas">
+                            <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                                <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                            </svg>
+                            <span class="menu-text-badge">
+                                <span>Alertas</span>
+                                <span class="badge-alert-count" id="sidebar-alert-count">0</span>
+                            </span>
+                        </a>
+                    </li>
+                    <li class="menu-item" data-tab="historial">
+                        <a href="#historial">
+                            <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 8v4l3 3"/>
+                                <circle cx="12" cy="12" r="10"/>
+                            </svg>
+                            <span>Historial</span>
+                        </a>
+                    </li>
+                    <?php endif; ?>
+                    <li class="menu-item" data-tab="reportes">
+                        <a href="#reportes">
+                            <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                                <polyline points="14 2 14 8 20 8"/>
+                                <line x1="16" y1="13" x2="8" y2="13"/>
+                                <line x1="16" y1="17" x2="8" y2="17"/>
+                                <line x1="10" y1="9" x2="8" y2="9"/>
+                            </svg>
+                            <span>Reportes</span>
+                        </a>
+                    </li>
+                    <?php if ($usuario_rol === 'ADMINISTRADOR' || $usuario_rol === 'OPERADOR'): ?>
+                    <li class="menu-item" data-tab="administrar">
+                        <a href="#administrar">
+                            <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                                <path d="M9 3v18"/>
+                                <path d="M15 3v18"/>
+                                <path d="M3 9h18"/>
+                                <path d="M3 15h18"/>
+                            </svg>
+                            <span>Adm. Viviendas</span>
+                        </a>
+                    </li>
+                    <?php endif; ?>
+                    <?php if ($usuario_rol === 'ADMINISTRADOR'): ?>
+                    <li class="menu-item" data-tab="bitacora">
+                        <a href="#bitacora">
+                            <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                                <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+                                <line x1="8" y1="11" x2="16" y2="11" />
+                                <line x1="8" y1="15" x2="16" y2="15" />
+                            </svg>
+                            <span>Bitácora</span>
+                        </a>
+                    </li>
+                    <li class="menu-item" data-tab="usuarios">
+                        <a href="#usuarios">
+                            <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                                <circle cx="9" cy="7" r="4" />
+                                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                            </svg>
+                            <span>Usuarios</span>
+                        </a>
+                    </li>
+                    <?php endif; ?>
+                </ul>
+            </nav>
+            
+            <div class="sidebar-footer">
+                <div class="user-profile">
+                    <div class="user-avatar" id="sidebar-user-avatar" style="overflow: hidden;">
+                        <?php if (!empty($usuario_foto)): ?>
+                            <img src="<?php echo htmlspecialchars($usuario_foto); ?>" alt="Avatar" style="width:100%; height:100%; object-fit:cover; border-radius:50%;">
+                        <?php else: ?>
+                            <?php echo htmlspecialchars($usuario_iniciales); ?>
+                        <?php endif; ?>
+                    </div>
+                    <div class="user-info">
+                        <span class="user-name" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 125px; display: block;"><?php echo htmlspecialchars($usuario_nombre); ?></span>
+                        <span class="user-role" style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--text-light);"><?php echo htmlspecialchars($usuario_rol); ?></span>
+                    </div>
+                </div>
+                <div class="db-status">
+                    <span class="status-dot green"></span>
+                    <span>Base de Datos Activa</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- CONTENIDO PRINCIPAL -->
+        <main class="main-content">
+            <!-- CABECERA (TOPBAR) -->
+            <header class="topbar">
+                <div class="topbar-left">
+                    <button class="mobile-menu-btn" id="mobile-menu-btn" aria-label="Abrir Menú">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="4" y1="12" x2="20" y2="12"></line>
+                            <line x1="4" y1="6" x2="20" y2="6"></line>
+                            <line x1="4" y1="18" x2="20" y2="18"></line>
+                        </svg>
+                    </button>
+                    <h2 class="section-title" id="page-title">Dashboard Principal</h2>
+                </div>
+                <div class="topbar-right">
+                    <div class="date-display" id="date-display">
+                        Cargando fecha...
+                    </div>
+                    <div class="system-alerts-icon" id="bell-dropdown-btn">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                        </svg>
+                        <span class="indicator-dot" id="header-alert-indicator"></span>
+                    </div>
+
+                    <!-- Menú Dropdown de Usuario -->
+                    <div class="user-dropdown-container" style="position: relative; display: inline-block; margin-left: 12px; z-index: 100;">
+                        <button class="topbar-user-btn" id="topbar-user-btn" style="background: none; border: none; display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 6px 12px; border-radius: 8px; transition: background-color 0.2s; outline: none;">
+                            <div class="user-avatar-top" id="topbar-user-avatar" style="width: 32px; height: 32px; background-color: var(--color-primary-light); color: var(--color-primary); display: flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 13px; font-weight: 700; border: 1px solid var(--border-color); flex-shrink: 0; overflow: hidden;">
+                                <?php if (!empty($usuario_foto)): ?>
+                                    <img src="<?php echo htmlspecialchars($usuario_foto); ?>" alt="Avatar" style="width:100%; height:100%; object-fit:cover;">
+                                <?php else: ?>
+                                    <?php echo htmlspecialchars($usuario_iniciales); ?>
+                                <?php endif; ?>
+                            </div>
+                            <div class="user-meta" style="text-align: left; display: flex; flex-direction: column;">
+                                <span class="user-name-top" style="font-size: 13px; font-weight: 600; color: var(--text-primary); display: block; max-width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><?php echo htmlspecialchars($usuario_nombre); ?></span>
+                                <span class="user-role-top" style="font-size: 9px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; display: block;"><?php echo htmlspecialchars($usuario_rol); ?></span>
+                            </div>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="color: var(--text-secondary); margin-left: 4px;">
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                        </button>
+                        
+                        <!-- Dropdown Menu -->
+                        <div class="user-dropdown-menu" id="user-dropdown-menu" style="display: none; position: absolute; right: 0; top: 46px; width: 190px; background-color: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; box-shadow: var(--shadow-lg); overflow: hidden; transform-origin: top right; z-index: 10000;">
+                            <div style="padding: 12px 16px; border-bottom: 1px solid var(--border-color); background-color: #FAFAFA;">
+                                <strong style="font-size: 13px; display: block; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><?php echo htmlspecialchars($usuario_nombre); ?></strong>
+                                <span style="font-size: 10px; color: var(--text-secondary); font-weight: 700; text-transform: uppercase;"><?php echo htmlspecialchars($usuario_rol); ?></span>
+                            </div>
+                            <button type="button" class="dropdown-item" id="btn-dropdown-profile" style="width: 100%; border: none; background: none; text-align: left; padding: 10px 16px; font-size: 13px; color: var(--text-primary); cursor: pointer; display: flex; align-items: center; gap: 8px; outline: none; transition: background-color 0.2s;">
+                                👤 Mi Perfil
+                            </button>
+                            <button type="button" class="dropdown-item" id="btn-dropdown-logout" style="width: 100%; border: none; background: none; text-align: left; padding: 10px 16px; font-size: 13px; color: var(--color-red); cursor: pointer; display: flex; align-items: center; gap: 8px; outline: none; border-top: 1px solid var(--border-color); transition: background-color 0.2s;">
+                                🚪 Cerrar Sesión
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- CONTENEDORES DE PESTAÑAS (TAB CONTENTS) -->
+            <div class="content-body">
+                
+                <!-- 1. DASHBOARD PRINCIPAL -->
+                <section id="dashboard" class="tab-content active">
+                    <!-- Fila de Tarjetas de Indicadores -->
+                    <div class="metrics-grid">
+                        <div class="metric-card card-total">
+                            <div class="metric-info">
+                                <h3>Total Viviendas</h3>
+                                <span class="metric-value" id="metric-total">--</span>
+                                <div class="metric-sub-wrapper" style="display: flex; align-items: center; margin-top: 4px;">
+                                    <span class="trend text-green">↗ +4%</span>
+                                    <span class="metric-sub" style="margin-top: 0;">Monitoreadas</span>
+                                </div>
+                            </div>
+                            <div class="metric-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                                    <polyline points="9 22 9 12 15 12 15 22"/>
+                                </svg>
+                            </div>
+                        </div>
+                        <div class="metric-card card-green">
+                            <div class="metric-info">
+                                <h3>Agua Apta (Verde)</h3>
+                                <span class="metric-value text-green" id="metric-green">0</span>
+                                <div class="metric-sub-wrapper" style="display: flex; align-items: center; margin-top: 4px;">
+                                    <span class="trend text-green">↗ Óptimo</span>
+                                    <span class="metric-sub" id="pct-green" style="margin-top: 0;">0% del total</span>
+                                </div>
+                            </div>
+                            <div class="metric-icon bg-green-light">
+                                <svg class="text-green" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                                    <polyline points="22 4 12 14.01 9 11.01"/>
+                                </svg>
+                            </div>
+                        </div>
+                        <div class="metric-card card-yellow">
+                            <div class="metric-info">
+                                <h3>En Observación</h3>
+                                <span class="metric-value text-yellow" id="metric-yellow">0</span>
+                                <div class="metric-sub-wrapper" style="display: flex; align-items: center; margin-top: 4px;">
+                                    <span class="trend text-yellow">↘ -8%</span>
+                                    <span class="metric-sub" id="pct-yellow" style="margin-top: 0;">0% del total</span>
+                                </div>
+                            </div>
+                            <div class="metric-icon bg-yellow-light">
+                                <svg class="text-yellow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                                    <line x1="12" y1="9" x2="12" y2="13"/>
+                                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                                </svg>
+                            </div>
+                        </div>
+                        <div class="metric-card card-red">
+                            <div class="metric-info">
+                                <h3>Crítico (Rojo)</h3>
+                                <span class="metric-value text-red" id="metric-red">0</span>
+                                <div class="metric-sub-wrapper" style="display: flex; align-items: center; margin-top: 4px;">
+                                    <span class="trend text-red">↗ Alerta</span>
+                                    <span class="metric-sub" id="pct-red" style="margin-top: 0;">0% del total</span>
+                                </div>
+                            </div>
+                            <div class="metric-icon bg-red-light">
+                                <svg class="text-red" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <line x1="15" y1="9" x2="9" y2="15"/>
+                                    <line x1="9" y1="9" x2="15" y2="15"/>
+                                </svg>
+                            </div>
+                        </div>
+                        <div class="metric-card card-alerts">
+                            <div class="metric-info">
+                                <h3>Alertas Activas</h3>
+                                <span class="metric-value" id="metric-alerts">0</span>
+                                <div class="metric-sub-wrapper" style="display: flex; align-items: center; margin-top: 4px;">
+                                    <span class="trend text-yellow">↘ -15%</span>
+                                    <span class="metric-sub text-red font-semibold" id="crit-alerts-sub" style="margin-top: 0;">0 Críticas</span>
+                                </div>
+                            </div>
+                            <div class="metric-icon bg-blue-light">
+                                <svg class="text-blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                                    <line x1="12" y1="9" x2="12" y2="13"/>
+                                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                                </svg>
+                            </div>
+                        </div>
+                        <div class="metric-card card-avg">
+                            <div class="metric-info" style="width: 100%;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                                    <h3 style="margin-bottom: 0;">Promedios</h3>
+                                    <span class="trend text-green">↗ Estable</span>
+                                </div>
+                                <div class="metric-double">
+                                    <div>
+                                        <span class="metric-value-small" id="avg-ph">7.20</span>
+                                        <span class="metric-label">pH Prom.</span>
+                                    </div>
+                                    <div class="border-left">
+                                        <span class="metric-value-small" id="avg-cloro">0.95</span>
+                                        <span class="metric-label">Cloro Prom.</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="metric-icon bg-cyan-light">
+                                <svg class="text-cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                                </svg>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Fila de Gráficos -->
+                    <div class="charts-grid">
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <h3>Evolución Semanal del pH</h3>
+                                <span class="chart-legend-badge">Valores promedio</span>
+                            </div>
+                            <div class="chart-container">
+                                <canvas id="phChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <h3>Evolución Semanal del Cloro</h3>
+                                <span class="chart-legend-badge">mg/L promedio</span>
+                            </div>
+                            <div class="chart-container">
+                                <canvas id="cloroChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="chart-card">
+                            <div class="chart-header">
+                                <h3>Distribución de Calidad</h3>
+                                <span class="chart-legend-badge">Estado actual</span>
+                            </div>
+                            <div class="chart-container-donut">
+                                <canvas id="distributionChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Fila Inferior: Actividad Reciente y Últimas Mediciones -->
+                    <div class="bottom-grid">
+                        <!-- Últimas Mediciones -->
+                        <div class="data-card table-card">
+                            <div class="card-header">
+                                <h3>Últimas Mediciones de Calidad</h3>
+                                <button class="btn btn-text btn-view-all" data-target-tab="historial">Ver Historial</button>
+                            </div>
+                            <div class="table-container">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Vivienda</th>
+                                            <th>pH</th>
+                                            <th>Cloro (mg/L)</th>
+                                            <th>Fecha</th>
+                                            <th>Estado</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="latest-measurements-tbody">
+                                        <!-- Se carga por JS -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Actividad Reciente -->
+                        <div class="data-card activity-card">
+                            <div class="card-header">
+                                <h3>Actividad Reciente</h3>
+                                <button class="btn btn-text btn-view-all" data-target-tab="alertas">Ver Alertas</button>
+                            </div>
+                            <div class="activity-timeline" id="recent-activity-list">
+                                <!-- Se carga por JS -->
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 2. REGISTRAR ANÁLISIS (WIZARD CONVERSACIONAL DE 4 PASOS) -->
+                <?php if ($usuario_rol === 'ADMINISTRADOR' || $usuario_rol === 'OPERADOR'): ?>
+                <section id="registrar" class="tab-content">
+                    <div class="wizard-container card shadow-lg">
+                        
+                        <!-- Barra de Progreso Superior -->
+                        <div class="wizard-header">
+                            <div class="wizard-progress-bar">
+                                <div class="progress-step active" data-step="1">
+                                    <div class="step-num">1</div>
+                                    <div class="step-label">Vivienda</div>
+                                </div>
+                                <div class="progress-line"></div>
+                                <div class="progress-step" data-step="2">
+                                    <div class="step-num">2</div>
+                                    <div class="step-label">Responsable</div>
+                                </div>
+                                <div class="progress-line"></div>
+                                <div class="progress-step" data-step="3">
+                                    <div class="step-num">3</div>
+                                    <div class="step-label">Mediciones</div>
+                                </div>
+                                <div class="progress-line"></div>
+                                <div class="progress-step" data-step="4">
+                                    <div class="step-num">4</div>
+                                    <div class="step-label">Resultado</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- PASO 1: SELECCIONAR O REGISTRAR VIVIENDA -->
+                        <div class="wizard-step-content active" id="wizard-step-1">
+                            <div class="step-intro text-center">
+                                <div class="step-icon-badge" style="background-color: rgba(37, 99, 235, 0.08); color: var(--color-primary); width: 54px; height: 54px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 12px auto; transition: all 0.3s ease; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24">
+                                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                                        <polyline points="9 22 9 12 15 12 15 22"/>
+                                    </svg>
+                                </div>
+                                <h2>Paso 1: Identificar Vivienda</h2>
+                                <p class="text-secondary">Selecciona una vivienda existente en la red o registra una nueva en el sistema.</p>
+                            </div>
+
+                            <div class="wizard-tabs">
+                                <button type="button" class="wizard-tab-btn active" id="tab-btn-existing" style="display: inline-flex; align-items: center; justify-content: center; gap: 8px;">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                                        <circle cx="12" cy="13" r="3"/>
+                                    </svg>
+                                    Seleccionar vivienda existente
+                                </button>
+                                <button type="button" class="wizard-tab-btn" id="tab-btn-new" style="display: inline-flex; align-items: center; justify-content: center; gap: 8px;">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                                        <line x1="12" y1="11" x2="12" y2="17"/>
+                                        <line x1="9" y1="14" x2="15" y2="14"/>
+                                    </svg>
+                                    Registrar nueva vivienda
+                                </button>
+                            </div>
+
+                            <!-- Panel A: Vivienda Existente -->
+                            <div class="wizard-tab-panel active" id="wizard-existing-panel">
+                                <div class="search-box-wrapper">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="search-icon">
+                                        <circle cx="11" cy="11" r="8"></circle>
+                                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                    </svg>
+                                    <input type="text" id="wizard-search-vivienda" placeholder="Buscar por nombre de familia, dirección o código (ej. V-01)...">
+                                </div>
+                                <div class="viviendas-cards-grid" id="wizard-viviendas-grid">
+                                    <!-- Cargado dinámicamente por JS con las 24 viviendas -->
+                                </div>
+                            </div>
+
+                            <!-- Panel B: Registrar Nueva Vivienda -->
+                            <div class="wizard-tab-panel" id="wizard-new-panel" style="display: none;">
+                                <div class="wizard-new-grid">
+                                    <!-- Form Column -->
+                                    <div class="wizard-new-form">
+                                        <div class="form-row">
+                                            <div class="form-group col-50">
+                                                <label for="new-vivienda-id">Código de Vivienda</label>
+                                                <input type="text" id="new-vivienda-id" disabled value="Autogenerando...">
+                                            </div>
+                                            <div class="form-group col-50">
+                                                <label for="new-vivienda-propietario">Propietario / Responsable *</label>
+                                                <input type="text" id="new-vivienda-propietario" placeholder="Ej. Familia Quispe Condori">
+                                            </div>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="new-vivienda-direccion">Dirección / Referencia *</label>
+                                            <input type="text" id="new-vivienda-direccion" placeholder="Ej. Calle Manco Cápac Nro. 450">
+                                        </div>
+                                        <div class="form-row">
+                                            <div class="form-group col-50">
+                                                <label for="new-vivienda-sector">Sector o Manzana *</label>
+                                                <select id="new-vivienda-sector">
+                                                    <option value="Sector Viva el Perú">Sector Viva el Perú</option>
+                                                    <option value="Sector Carmen Alto">Sector Carmen Alto</option>
+                                                    <option value="Sector Sacsayhuamán">Sector Sacsayhuamán</option>
+                                                    <option value="Asoc. Inti Raymi">Asoc. Inti Raymi</option>
+                                                    <option value="Asoc. San Martín">Asoc. San Martín</option>
+                                                </select>
+                                            </div>
+                                            <div class="form-group col-50">
+                                                <label for="new-vivienda-telefono">Teléfono (Opcional)</label>
+                                                <input type="text" id="new-vivienda-telefono" placeholder="Ej. 984123456">
+                                            </div>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="new-vivienda-obs">Observaciones Iniciales</label>
+                                            <textarea id="new-vivienda-obs" rows="2" placeholder="Ej. Conexión de tubería antigua, requiere mantenimiento..."></textarea>
+                                        </div>
+                                        
+                                        <!-- Coordenadas -->
+                                        <div class="form-row">
+                                            <div class="form-group col-50">
+                                                <label for="new-vivienda-lat">Latitud *</label>
+                                                <input type="number" id="new-vivienda-lat" step="0.000001" placeholder="Ej. -13.5414" readonly>
+                                            </div>
+                                            <div class="form-group col-50">
+                                                <label for="new-vivienda-lng">Longitud *</label>
+                                                <input type="number" id="new-vivienda-lng" step="0.000001" placeholder="Ej. -71.9794" readonly>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Map Column -->
+                                    <div class="wizard-new-map-panel">
+                                        <label>Ubicación Geográfica en el Mapa</label>
+                                        <p class="help-text">Busca la manzana/sector, haz clic en el mapa o usa tu GPS para situar la vivienda.</p>
+                                        
+                                        <div class="map-search-row">
+                                            <input type="text" id="new-vivienda-map-search" placeholder="Buscar sector o calle (ej. Carmen Alto)...">
+                                            <button type="button" class="btn btn-secondary btn-small" id="btn-search-new-vivienda-address">Buscar</button>
+                                        </div>
+                                        
+                                        <div id="new-vivienda-map" style="height: 180px; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 12px; z-index: 1;"></div>
+                                        
+                                        <div class="map-action-buttons">
+                                            <button type="button" class="btn btn-secondary btn-small btn-full-width" id="btn-use-current-location">
+                                                📍 Usar mi ubicación actual
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Preview & Registration Action -->
+                                <div class="wizard-new-preview-bar">
+                                    <div class="preview-info-text">
+                                        <strong>Previsualización:</strong> <span id="new-vivienda-preview-text">Complete los campos requeridos (*)</span>
+                                    </div>
+                                    <button type="button" class="btn btn-primary" id="btn-save-new-vivienda">
+                                        ➕ Registrar Vivienda
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- PASO 2: INGRESAR RESPONSABLE -->
+                        <div class="wizard-step-content" id="wizard-step-2">
+                            <div class="step-intro text-center">
+                                <div class="avatar-greeting-wrapper">
+                                    <div class="greeting-avatar">👋</div>
+                                    <h2>¡Hola! Registremos los detalles</h2>
+                                </div>
+                                <p class="text-secondary">Por favor ingresa los datos de la persona encargada de realizar esta muestra.</p>
+                            </div>
+                            
+                            <div class="conversational-form">
+                                <div class="form-question">
+                                    <label for="wizard-responsable" class="question-label">¿Quién es el responsable o propietario de la muestra?</label>
+                                    <input type="text" id="wizard-responsable" placeholder="Escribe el nombre completo aquí..." class="large-conversational-input">
+                                </div>
+                                <div class="form-question">
+                                    <label class="question-label">Fecha de registro automática</label>
+                                    <div class="automatic-date-badge" id="wizard-date-badge">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                                            <line x1="16" y1="2" x2="16" y2="6"/>
+                                            <line x1="8" y1="2" x2="8" y2="6"/>
+                                            <line x1="3" y1="10" x2="21" y2="10"/>
+                                        </svg>
+                                        <span id="wizard-automatic-date-text">--/--/----</span>
+                                    </div>
+                                </div>
+                                <div class="form-question">
+                                    <label for="wizard-observaciones" class="question-label">Observaciones o notas de campo (Opcional)</label>
+                                    <textarea id="wizard-observaciones" placeholder="¿Algún detalle extraño en el olor, color o comentarios del propietario?..." rows="3" class="conversational-textarea"></textarea>
+                                </div>
+                            </div>
+                            
+                            <div class="wizard-actions">
+                                <button type="button" class="btn btn-secondary btn-wizard-back">Atrás</button>
+                                <button type="button" class="btn btn-primary btn-wizard-next" id="btn-to-step-3">Siguiente</button>
+                            </div>
+                        </div>
+
+                        <!-- PASO 3: COMPARACIÓN CON TIRAS REACTIVAS -->
+                        <div class="wizard-step-content" id="wizard-step-3">
+                            <div class="step-intro text-center">
+                                <div class="step-icon-badge" style="background-color: rgba(6, 182, 212, 0.08); color: var(--color-cyan); width: 54px; height: 54px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 12px auto; transition: all 0.3s ease; box-shadow: 0 4px 12px rgba(6, 182, 212, 0.08);">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="24" height="24">
+                                        <path d="M6 3h12M10 3v9l-4.5 7.5a2 2 0 0 0 1.7 2.5h9.6a2 2 0 0 0 1.7-2.5L14 12V3h-4z"/>
+                                    </svg>
+                                </div>
+                                <h2>Paso 3: Comparación con Tiras Reactivas</h2>
+                                <p class="text-secondary">Compara el color de la tira física con las escalas de color y selecciona las opciones observadas.</p>
+                            </div>
+                            
+                            <!-- Ayuda Visual -->
+                            <div class="test-strip-help-banner">
+                                <div class="help-visual-strip">
+                                    <svg viewBox="0 0 100 40" width="80" height="32" class="strip-svg">
+                                        <rect x="5" y="12" width="90" height="16" rx="4" fill="#E2E8F0" stroke="#CBD5E1" stroke-width="1.5"></rect>
+                                        <rect id="visual-pad-ph" x="15" y="14" width="12" height="12" rx="2" fill="#FACC15"></rect>
+                                        <rect id="visual-pad-cloro" x="40" y="14" width="12" height="12" rx="2" fill="#22C55E"></rect>
+                                    </svg>
+                                </div>
+                                <div class="help-text-content">
+                                    <strong>Comparación Visual:</strong> Compare el color obtenido en los parches de la tira física reactiva con las escalas de laboratorio inferiores y seleccione el color más parecido.
+                                </div>
+                            </div>
+
+                            <div class="test-strips-scales-wrapper">
+                                <!-- Escala de pH -->
+                                <div class="strip-scale-card card">
+                                    <div class="scale-header" style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                                        <div style="background-color: rgba(37, 99, 235, 0.08); color: var(--color-primary); width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="20" height="20">
+                                                <path d="M12 22a7 7 0 0 0 7-7c0-4.3-7-11-7-11S5 10.7 5 15a7 7 0 0 0 7 7z"/>
+                                            </svg>
+                                        </div>
+                                        <div>
+                                            <h3 style="margin: 0; font-size: 15px; font-weight: 700; color: var(--text-primary);">Escala de pH (Papel Indicador)</h3>
+                                            <p class="scale-subtitle" style="margin: 2px 0 0 0; font-size: 11.5px; color: var(--text-secondary);">Rango seguro oficial: 6.5 a 8.5 pH</p>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Grilla de Colores de pH -->
+                                    <div class="color-scale-grid" id="ph-color-scale">
+                                        <button type="button" class="color-scale-card" data-ph="2.0" data-color-name="Rojo intenso" style="--scale-color: #EF4444;">
+                                            <span class="color-value">pH 2</span>
+                                            <span class="color-label">Ácido Crítico</span>
+                                        </button>
+                                        <button type="button" class="color-scale-card" data-ph="4.0" data-color-name="Naranja rojizo" style="--scale-color: #F97316;">
+                                            <span class="color-value">pH 4</span>
+                                            <span class="color-label">Ácido Moderado</span>
+                                        </button>
+                                        <button type="button" class="color-scale-card" data-ph="6.0" data-color-name="Naranja" style="--scale-color: #FBBF24;">
+                                            <span class="color-value">pH 6</span>
+                                            <span class="color-label">Ácido Leve</span>
+                                        </button>
+                                        <button type="button" class="color-scale-card active" data-ph="7.0" data-color-name="Amarillo" style="--scale-color: #FACC15;">
+                                            <span class="color-value">pH 7</span>
+                                            <span class="color-label">Neutro (Apto)</span>
+                                            <span class="selected-badge">✓</span>
+                                        </button>
+                                        <button type="button" class="color-scale-card" data-ph="8.0" data-color-name="Verde claro" style="--scale-color: #4ADE80;">
+                                            <span class="color-value">pH 8</span>
+                                            <span class="color-label">Alcalino Leve</span>
+                                        </button>
+                                        <button type="button" class="color-scale-card" data-ph="10.0" data-color-name="Verde oliva" style="--scale-color: #65A30D;">
+                                            <span class="color-value">pH 10</span>
+                                            <span class="color-label">Alcalino Alto</span>
+                                        </button>
+                                        <button type="button" class="color-scale-card" data-ph="12.0" data-color-name="Azul oscuro" style="--scale-color: #1D4ED8;">
+                                            <span class="color-value">pH 12</span>
+                                            <span class="color-label">Alcalino Crítico</span>
+                                        </button>
+                                        <button type="button" class="color-scale-card" data-ph="14.0" data-color-name="Morado" style="--scale-color: #7C3AED;">
+                                            <span class="color-value">pH 14</span>
+                                            <span class="color-label">Alcalino Extremo</span>
+                                        </button>
+                                    </div>
+                                    
+                                    <!-- Preview e Interpretación de pH -->
+                                    <div class="scale-preview-bar">
+                                        <div class="preview-text">
+                                            Color seleccionado: <span id="ph-selected-color-name">Amarillo</span> | pH estimado: <span id="ph-selected-val">7.0</span>
+                                        </div>
+                                        <div class="interpretation-badge verde" id="ph-interpretation-badge">
+                                            🟢 Óptimo
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Escala de Cloro Residual -->
+                                <div class="strip-scale-card card">
+                                    <div class="scale-header" style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                                        <div style="background-color: rgba(6, 182, 212, 0.08); color: var(--color-cyan); width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="20" height="20">
+                                                <path d="M6 3h12M10 3v9l-4.5 7.5a2 2 0 0 0 1.7 2.5h9.6a2 2 0 0 0 1.7-2.5L14 12V3h-4z"/>
+                                            </svg>
+                                        </div>
+                                        <div>
+                                            <h3 style="margin: 0; font-size: 15px; font-weight: 700; color: var(--text-primary);">Escala de Cloro Residual Libre</h3>
+                                            <p class="scale-subtitle" style="margin: 2px 0 0 0; font-size: 11.5px; color: var(--text-secondary);">Rango seguro oficial: 0.5 a 1.5 mg/L</p>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Grilla de Colores de Cloro -->
+                                    <div class="color-scale-grid chlorine" id="cloro-color-scale">
+                                        <button type="button" class="color-scale-card" data-cloro="0.10" data-color-name="Rojo claro" style="--scale-color: #EF4444;">
+                                            <span class="color-value">0.1 mg/L</span>
+                                            <span class="color-label">Insuficiente</span>
+                                        </button>
+                                        <button type="button" class="color-scale-card" data-cloro="0.30" data-color-name="Amarillo anaranjado" style="--scale-color: #FBBF24;">
+                                            <span class="color-value">0.3 mg/L</span>
+                                            <span class="color-label">Bajo</span>
+                                        </button>
+                                        <button type="button" class="color-scale-card active" data-cloro="1.00" data-color-name="Verde brillante" style="--scale-color: #22C55E;">
+                                            <span class="color-value">1.0 mg/L</span>
+                                            <span class="color-label">Óptimo (Apto)</span>
+                                            <span class="selected-badge">✓</span>
+                                        </button>
+                                        <button type="button" class="color-scale-card" data-cloro="1.80" data-color-name="Amarillo verdoso" style="--scale-color: #84CC16;">
+                                            <span class="color-value">1.8 mg/L</span>
+                                            <span class="color-label">Alto</span>
+                                        </button>
+                                        <button type="button" class="color-scale-card" data-cloro="2.50" data-color-name="Rojo magenta" style="--scale-color: #DC2626;">
+                                            <span class="color-value">2.5 mg/L</span>
+                                            <span class="color-label">Exceso Nocivo</span>
+                                        </button>
+                                    </div>
+                                    
+                                    <!-- Preview e Interpretación de Cloro -->
+                                    <div class="scale-preview-bar">
+                                        <div class="preview-text">
+                                            Color seleccionado: <span id="cloro-selected-color-name">Verde brillante</span> | Cloro estimado: <span id="cloro-selected-val">1.00 mg/L</span>
+                                        </div>
+                                        <div class="interpretation-badge verde" id="cloro-interpretation-badge">
+                                            🟢 Óptimo
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="wizard-actions">
+                                <button type="button" class="btn btn-secondary btn-wizard-back">Atrás</button>
+                                <button type="button" class="btn btn-primary btn-wizard-next" id="btn-to-step-4">Siguiente</button>
+                            </div>
+                        </div>
+
+                        <!-- PASO 4: RESULTADO SANITARIO -->
+                        <div class="wizard-step-content" id="wizard-step-4">
+                            <!-- Banner de Resultado de Pantalla Completa (se ajusta dinámicamente) -->
+                            <div class="full-screen-result-banner" id="wizard-result-banner">
+                                <div class="result-status-visual-ring">
+                                    <!-- Animación de Icono SVG -->
+                                    <div class="result-icon-holder" id="wizard-result-icon">
+                                        <!-- Cargado por JS -->
+                                    </div>
+                                </div>
+                                <h2 id="wizard-result-title">EVALUACIÓN DE AGUA</h2>
+                                <p id="wizard-result-desc">--</p>
+                            </div>
+
+                            <div class="result-details-layout">
+                                <!-- Recomendaciones automáticas -->
+                                <div class="result-card card shadow-soft">
+                                    <h3>Recomendaciones Técnicas</h3>
+                                    <ul class="wizard-recommendations-list" id="wizard-recommendations-list">
+                                        <!-- JS -->
+                                    </ul>
+                                </div>
+
+                                <!-- Resumen Técnico -->
+                                <div class="result-card card shadow-soft">
+                                    <h3>Resumen del Registro</h3>
+                                    <div class="summary-details-list">
+                                        <div class="summary-item">
+                                            <span class="summary-lbl">Vivienda:</span>
+                                            <strong id="summary-vivienda-name">--</strong>
+                                        </div>
+                                        <div class="summary-item">
+                                            <span class="summary-lbl">Responsable:</span>
+                                            <strong id="summary-responsable-name">--</strong>
+                                        </div>
+                                        <div class="summary-item">
+                                            <span class="summary-lbl">Fecha de medición:</span>
+                                            <strong id="summary-date-text">--</strong>
+                                        </div>
+                                        <div class="summary-item">
+                                            <span class="summary-lbl">pH Obtenido:</span>
+                                            <strong id="summary-ph-value">--</strong>
+                                        </div>
+                                        <div class="summary-item">
+                                            <span class="summary-lbl">Cloro Residual:</span>
+                                            <strong id="summary-cloro-value">--</strong>
+                                        </div>
+                                        <div class="summary-item">
+                                            <span class="summary-lbl">Observaciones:</span>
+                                            <span class="summary-observations-text" id="summary-observations-text">--</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="wizard-actions final-actions">
+                                <button type="button" class="btn btn-secondary btn-wizard-back" id="btn-back-to-step-3">⬅ Volver a mediciones</button>
+                                <button type="button" class="btn btn-primary" id="btn-wizard-save-analysis">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                                        <polyline points="17 21 17 13 7 13 7 21"/>
+                                        <polyline points="7 3 7 8 15 8"/>
+                                    </svg>
+                                    💾 Guardar análisis
+                                </button>
+                            </div>
+                        </div>
+
+                    </div>
+                </section>
+                <?php endif; ?>
+
+                <!-- 3. MAPA COMUNITARIO -->
+                <section id="mapa" class="tab-content">
+                    <!-- Fila Superior de KPIs del Mapa -->
+                    <div class="map-kpi-grid">
+                        <div class="map-kpi-card">
+                            <div class="kpi-icon-wrapper bg-blue-light text-blue">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                                    <polyline points="9 22 9 12 15 12 15 22"/>
+                                </svg>
+                            </div>
+                            <div class="kpi-details">
+                                <span class="kpi-title">Viviendas Totales</span>
+                                <span class="kpi-value" id="map-kpi-total">--</span>
+                            </div>
+                        </div>
+                        <div class="map-kpi-card">
+                            <div class="kpi-icon-wrapper bg-green-light text-green">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                                    <polyline points="22 4 12 14.01 9 11.01"/>
+                                </svg>
+                            </div>
+                            <div class="kpi-details">
+                                <span class="kpi-title">Viviendas Aptas</span>
+                                <span class="kpi-value text-green" id="map-kpi-green">12</span>
+                            </div>
+                        </div>
+                        <div class="map-kpi-card">
+                            <div class="kpi-icon-wrapper bg-yellow-light text-yellow">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                                    <line x1="12" y1="9" x2="12" y2="13"/>
+                                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                                </svg>
+                            </div>
+                            <div class="kpi-details">
+                                <span class="kpi-title">En Observación</span>
+                                <span class="kpi-value text-yellow" id="map-kpi-yellow">8</span>
+                            </div>
+                        </div>
+                        <div class="map-kpi-card">
+                            <div class="kpi-icon-wrapper bg-red-light text-red">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <line x1="15" y1="9" x2="9" y2="15"/>
+                                    <line x1="9" y1="9" x2="15" y2="15"/>
+                                </svg>
+                            </div>
+                            <div class="kpi-details">
+                                <span class="kpi-title">Viviendas Críticas</span>
+                                <span class="kpi-value text-red" id="map-kpi-red">4</span>
+                            </div>
+                        </div>
+                        <div class="map-kpi-card">
+                            <div class="kpi-icon-wrapper bg-red-light text-red">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                                    <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                                </svg>
+                            </div>
+                            <div class="kpi-details">
+                                <span class="kpi-title">Alertas Activas</span>
+                                <span class="kpi-value text-red" id="map-kpi-alerts">12</span>
+                            </div>
+                        </div>
+                        <!-- KPI Destacado: Índice General de Calidad -->
+                        <div class="map-kpi-card kpi-highlight-card" id="kpi-water-index-card">
+                            <div class="kpi-details-full">
+                                <div class="kpi-flex-header">
+                                    <span class="kpi-title">INDICE DE CALIDAD DE AGUA</span>
+                                    <span class="index-quality-badge green" id="map-index-badge">Excelente</span>
+                                </div>
+                                <div class="index-display-row">
+                                    <span class="index-percent-value" id="map-index-value">95%</span>
+                                    <div class="index-progress-container">
+                                        <div class="index-progress-bar" id="map-index-progress" style="width: 95%;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="map-layout">
+                        <!-- Rediseño Filtros y Leyendas Side Panel -->
+                        <div class="map-sidebar card shadow-soft">
+                            <div class="card-header border-bottom">
+                                <h3>Filtros Especializados</h3>
+                                <p class="card-subtitle">Control y visualización de capas de monitoreo hídrico.</p>
+                            </div>
+                            
+                            <!-- Tarjetas Premium de Filtros -->
+                            <div class="map-premium-filters">
+                                <div class="premium-filter-card active" data-map-filter="todos">
+                                    <div class="pf-card-left">
+                                        <div class="pf-circle bg-gray-light">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <circle cx="12" cy="12" r="10"/>
+                                                <path d="M8 12h8"/>
+                                            </svg>
+                                        </div>
+                                        <div class="pf-info">
+                                            <span class="pf-title">Todas las Viviendas</span>
+                                            <span class="pf-desc">Ver universo monitoreado</span>
+                                        </div>
+                                    </div>
+                                    <span class="pf-count bg-gray-light text-secondary" id="map-premium-cnt-all">--</span>
+                                </div>
+                                
+                                <div class="premium-filter-card text-green" data-map-filter="verde">
+                                    <div class="pf-card-left">
+                                        <div class="pf-circle bg-green-light">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <polyline points="20 6 9 17 4 12"/>
+                                            </svg>
+                                        </div>
+                                        <div class="pf-info">
+                                            <span class="pf-title">🟢 Agua Segura</span>
+                                            <span class="pf-desc">Consumo apto permitido</span>
+                                        </div>
+                                    </div>
+                                    <span class="pf-count bg-green-light" id="map-premium-cnt-green">12</span>
+                                </div>
+
+                                <div class="premium-filter-card text-yellow" data-map-filter="amarillo">
+                                    <div class="pf-card-left">
+                                        <div class="pf-circle bg-yellow-light">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <line x1="12" y1="9" x2="12" y2="13"/>
+                                                <line x1="12" y1="17" x2="12.01" y2="17"/>
+                                            </svg>
+                                        </div>
+                                        <div class="pf-info">
+                                            <span class="pf-title">🟡 Rev. Preventiva</span>
+                                            <span class="pf-desc">Requiere seguimiento</span>
+                                        </div>
+                                    </div>
+                                    <span class="pf-count bg-yellow-light" id="map-premium-cnt-yellow">8</span>
+                                </div>
+
+                                <div class="premium-filter-card text-red" data-map-filter="rojo">
+                                    <div class="pf-card-left">
+                                        <div class="pf-circle bg-red-light">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <line x1="18" y1="6" x2="6" y2="18"/>
+                                                <line x1="6" y1="6" x2="18" y2="18"/>
+                                            </svg>
+                                        </div>
+                                        <div class="pf-info">
+                                            <span class="pf-title">🔴 Riesgo Crítico</span>
+                                            <span class="pf-desc">No apta para consumo</span>
+                                        </div>
+                                    </div>
+                                    <span class="pf-count bg-red-light text-red" id="map-premium-cnt-red">4</span>
+                                </div>
+                            </div>
+
+                            <hr class="map-sidebar-divider">
+
+                            <!-- Controles del Heatmap y Capas -->
+                            <div class="gis-layers-control">
+                                <h4>Controles de Capas Geográficas</h4>
+                                <p class="card-subtitle" style="margin-bottom: 12px;">Visualizaciones avanzadas de riesgo sanitario.</p>
+                                
+                                <div class="heatmap-toggle-container">
+                                    <button class="btn btn-secondary btn-small btn-full-width active" id="btn-toggle-heatmap">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                                        </svg>
+                                        Ocultar Heatmap
+                                    </button>
+                                </div>
+
+                                <div class="view-modes-grid">
+                                    <button class="btn btn-secondary btn-small" id="btn-mode-markers" title="Vista con Marcadores Simples">Vista Marcadores</button>
+                                    <button class="btn btn-secondary btn-small" id="btn-mode-heatmap" title="Vista de Mapa de Calor de Riesgo">Vista Heatmap</button>
+                                    <button class="btn btn-secondary btn-small active" id="btn-mode-combined" title="Vista Combinada Marcadores + Calor">Vista Combinada</button>
+                                </div>
+                            </div>
+
+                            <hr class="map-sidebar-divider">
+
+                            <!-- Leyenda del Heatmap y Calidad -->
+                            <div class="map-legend">
+                                <h4>Riesgo Sanitario (Heatmap)</h4>
+                                <div class="heatmap-legend-bar"></div>
+                                <div class="heatmap-legend-labels">
+                                    <span><span class="legend-dot verde"></span>Bajo</span>
+                                    <span><span class="legend-dot amarillo"></span>Medio</span>
+                                    <span><span class="legend-dot rojo"></span>Alto</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Contenedor del Mapa Leaflet -->
+                        <div class="map-wrapper card shadow-soft">
+                            <div id="map-view"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 4. ALERTAS -->
+                <?php if ($usuario_rol === 'ADMINISTRADOR' || $usuario_rol === 'OPERADOR'): ?>
+                <section id="alertas" class="tab-content">
+                    <div class="alerts-layout">
+                        <!-- Cabecera y Filtros de Alertas -->
+                        <div class="filter-bar card shadow-soft">
+                            <div class="alert-filters">
+                                <div class="search-box">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="search-icon">
+                                        <circle cx="11" cy="11" r="8"/>
+                                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                                    </svg>
+                                    <input type="text" id="alert-search" placeholder="Buscar por vivienda o responsable...">
+                                </div>
+                                <div class="filter-buttons">
+                                    <button class="btn btn-filter active" data-alert-filter="all">Todas</button>
+                                    <button class="btn btn-filter text-red font-semibold" data-alert-filter="critica">Críticas</button>
+                                    <button class="btn btn-filter text-yellow font-semibold" data-alert-filter="preventiva">Preventivas</button>
+                                    <button class="btn btn-filter text-green font-semibold" data-alert-filter="informativa">Informativas</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tarjetas de Resumen de Alertas (Contadores) -->
+                        <div class="alert-summary-cards">
+                            <div class="alert-summary-card status-critica" id="summary-card-critica">
+                                <div class="card-icon bg-red-light">
+                                    <svg class="text-red" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="18" height="18">
+                                        <path d="M12 22a7 7 0 0 0 7-7c0-4.3-7-11-7-11S5 10.7 5 15a7 7 0 0 0 7 7z"/>
+                                        <line x1="12" y1="11" x2="12" y2="14" stroke-linecap="round"/>
+                                        <circle cx="12" cy="17" r="0.75" fill="currentColor"/>
+                                    </svg>
+                                </div>
+                                <div class="card-info">
+                                    <span class="lbl">Críticas</span>
+                                    <strong class="val" id="alert-cnt-critica">0</strong>
+                                </div>
+                            </div>
+                            <div class="alert-summary-card status-preventiva" id="summary-card-preventiva">
+                                <div class="card-icon bg-yellow-light">
+                                    <svg class="text-yellow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="18" height="18">
+                                        <path d="M12 22a7 7 0 0 0 7-7c0-4.3-7-11-7-11S5 10.7 5 15a7 7 0 0 0 7 7z"/>
+                                        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" stroke-linecap="round"/>
+                                        <line x1="12" y1="17" x2="12.01" y2="17" stroke-linecap="round"/>
+                                    </svg>
+                                </div>
+                                <div class="card-info">
+                                    <span class="lbl">Preventivas</span>
+                                    <strong class="val" id="alert-cnt-preventiva">0</strong>
+                                </div>
+                            </div>
+                            <div class="alert-summary-card status-informativa" id="summary-card-informativa">
+                                <div class="card-icon bg-green-light">
+                                    <svg class="text-green" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="18" height="18">
+                                        <path d="M12 22a7 7 0 0 0 7-7c0-4.3-7-11-7-11S5 10.7 5 15a7 7 0 0 0 7 7z"/>
+                                        <polyline points="9 15 11 17 15 13" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </div>
+                                <div class="card-info">
+                                    <span class="lbl">Informativas</span>
+                                    <strong class="val" id="alert-cnt-informativa">0</strong>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Lista de Alertas -->
+                        <div class="alerts-container" id="alerts-cards-list">
+                            <!-- Se carga dinámicamente mediante JS -->
+                        </div>
+                    </div>
+                </section>
+                <?php endif; ?>
+
+                <!-- 5. HISTORIAL -->
+                <?php if ($usuario_rol === 'ADMINISTRADOR' || $usuario_rol === 'OPERADOR'): ?>
+                <section id="historial" class="tab-content">
+                    <div class="history-layout card shadow-soft">
+                        <div class="card-header border-bottom flex-between" style="align-items: center; gap: 16px;">
+                            <div>
+                                <h3>Historial de Evaluaciones Hídricas</h3>
+                                <p class="card-subtitle">Listado general de todas las mediciones ordenadas cronológicamente.</p>
+                            </div>
+                            <button type="button" class="btn btn-secondary text-red font-semibold" id="btn-clear-all-history" style="display: inline-flex; align-items: center; gap: 6px; border-color: var(--color-red-light); color: var(--color-red-hover); background-color: var(--color-red-light); padding: 8px 16px; border-radius: 6px; cursor: pointer; border: none; font-size: 13px;">
+                                🗑️ Eliminar Historial Completo
+                            </button>
+                        </div>
+
+                        <!-- Tarjetas de Estadísticas Rápidas de Historial -->
+                        <div class="history-summary-cards" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; padding: 20px 24px; background-color: var(--bg-primary); border-bottom: 1px solid var(--border-color);">
+                            <div class="hist-kpi-card" style="background-color: #FFFFFF; border-radius: var(--border-radius-md); padding: 16px; border: 1px solid var(--border-color); box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: 12px; transition: transform 0.2s ease;">
+                                <div style="background-color: rgba(37, 99, 235, 0.08); color: var(--color-primary); width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="20" height="20">
+                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                        <polyline points="14 2 14 8 20 8"/>
+                                        <line x1="16" y1="13" x2="8" y2="13"/>
+                                        <line x1="16" y1="17" x2="8" y2="17"/>
+                                        <polyline points="10 9 9 9 8 9"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <span style="font-size: 11.5px; color: var(--text-secondary); font-weight: 600; display: block;">Evaluaciones Totales</span>
+                                    <strong id="hist-kpi-total" style="font-size: 18px; font-weight: 800; color: var(--text-primary);">0</strong>
+                                </div>
+                            </div>
+                            <div class="hist-kpi-card" style="background-color: #FFFFFF; border-radius: var(--border-radius-md); padding: 16px; border: 1px solid var(--border-color); box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: 12px; transition: transform 0.2s ease;">
+                                <div style="background-color: rgba(34, 197, 94, 0.08); color: var(--color-green); width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="20" height="20">
+                                        <path d="M12 22a7 7 0 0 0 7-7c0-4.3-7-11-7-11S5 10.7 5 15a7 7 0 0 0 7 7z"/>
+                                        <polyline points="9 15 11 17 15 13" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <span style="font-size: 11.5px; color: var(--text-secondary); font-weight: 600; display: block;">Muestras Aptas</span>
+                                    <strong id="hist-kpi-green" style="font-size: 18px; font-weight: 800; color: var(--color-green-hover);">0</strong>
+                                </div>
+                            </div>
+                            <div class="hist-kpi-card" style="background-color: #FFFFFF; border-radius: var(--border-radius-md); padding: 16px; border: 1px solid var(--border-color); box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: 12px; transition: transform 0.2s ease;">
+                                <div style="background-color: rgba(245, 158, 11, 0.08); color: var(--color-yellow); width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="20" height="20">
+                                        <path d="M12 22a7 7 0 0 0 7-7c0-4.3-7-11-7-11S5 10.7 5 15a7 7 0 0 0 7 7z"/>
+                                        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" stroke-linecap="round"/>
+                                        <line x1="12" y1="17" x2="12.01" y2="17" stroke-linecap="round"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <span style="font-size: 11.5px; color: var(--text-secondary); font-weight: 600; display: block;">En Observación</span>
+                                    <strong id="hist-kpi-yellow" style="font-size: 18px; font-weight: 800; color: #b45309;">0</strong>
+                                </div>
+                            </div>
+                            <div class="hist-kpi-card" style="background-color: #FFFFFF; border-radius: var(--border-radius-md); padding: 16px; border: 1px solid var(--border-color); box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: 12px; transition: transform 0.2s ease;">
+                                <div style="background-color: rgba(239, 68, 68, 0.08); color: var(--color-red); width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="20" height="20">
+                                        <path d="M12 22a7 7 0 0 0 7-7c0-4.3-7-11-7-11S5 10.7 5 15a7 7 0 0 0 7 7z"/>
+                                        <line x1="12" y1="11" x2="12" y2="14" stroke-linecap="round"/>
+                                        <circle cx="12" cy="17" r="0.75" fill="currentColor"/>
+                                    </svg>
+                                </div>
+                                <div>
+                                    <span style="font-size: 11.5px; color: var(--text-secondary); font-weight: 600; display: block;">En Riesgo</span>
+                                    <strong id="hist-kpi-red" style="font-size: 18px; font-weight: 800; color: var(--color-red-hover);">0</strong>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Filtros Avanzados -->
+                        <div class="history-advanced-filters-bar">
+                            <div class="filter-group">
+                                <label for="history-search">Búsqueda Rápida</label>
+                                <div class="search-box">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="search-icon">
+                                        <circle cx="11" cy="11" r="8"/>
+                                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                                    </svg>
+                                    <input type="text" id="history-search" placeholder="Buscar vivienda, obs...">
+                                </div>
+                            </div>
+                            <div class="filter-group">
+                                <label for="history-filter-date-from">Desde</label>
+                                <input type="date" id="history-filter-date-from">
+                            </div>
+                            <div class="filter-group">
+                                <label for="history-filter-date-to">Hasta</label>
+                                <input type="date" id="history-filter-date-to">
+                            </div>
+                            <div class="filter-group">
+                                <label for="history-filter-status">Estado</label>
+                                <select id="history-filter-status">
+                                    <option value="todos">Todos</option>
+                                    <option value="verde">🟢 APTA</option>
+                                    <option value="amarillo">🟡 OBSERVACIÓN</option>
+                                    <option value="rojo">🔴 CRÍTICA</option>
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label for="history-filter-responsable">Responsable</label>
+                                <input type="text" id="history-filter-responsable" placeholder="Responsable (ej. Juan)...">
+                            </div>
+                            <div class="filter-group">
+                                <label for="history-filter-sector">Sector / Manzana</label>
+                                <select id="history-filter-sector">
+                                    <option value="todos">Todos</option>
+                                    <option value="Sector Viva el Perú">Sector Viva el Perú</option>
+                                    <option value="Sector Carmen Alto">Sector Carmen Alto</option>
+                                    <option value="Sector Sacsayhuamán">Sector Sacsayhuamán</option>
+                                    <option value="Asoc. Inti Raymi">Asoc. Inti Raymi</option>
+                                    <option value="Asoc. San Martín">Asoc. San Martín</option>
+                                </select>
+                            </div>
+                            <div class="filter-group" style="justify-content: flex-end;">
+                                <button type="button" class="btn btn-secondary" id="btn-clear-history-filters" style="height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 600;">
+                                    🔄 Limpiar Filtros
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="table-container history-table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th style="width: 50px; text-align: center;">⭐</th>
+                                        <th class="sortable" data-sort="fecha">Fecha <span class="sort-icon">⇅</span></th>
+                                        <th class="sortable" data-sort="vivienda">Vivienda <span class="sort-icon">⇅</span></th>
+                                        <th class="sortable" data-sort="responsable">Responsable <span class="sort-icon">⇅</span></th>
+                                        <th class="sortable" data-sort="ph">pH <span class="sort-icon">⇅</span></th>
+                                        <th class="sortable" data-sort="cloro">Cloro (mg/L) <span class="sort-icon">⇅</span></th>
+                                        <th class="sortable" data-sort="estado">Estado <span class="sort-icon">⇅</span></th>
+                                        <th>Observaciones</th>
+                                        <th>Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="history-table-tbody">
+                                    <!-- Cargado por JS -->
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="table-pagination">
+                            <span class="pagination-info" id="pagination-info">Mostrando 1-10 de 50 registros</span>
+                            <div class="pagination-buttons">
+                                <button class="btn btn-small" id="btn-prev-page">Anterior</button>
+                                <div class="page-numbers-container" id="page-numbers-container">
+                                    <!-- Números de página -->
+                                </div>
+                                <button class="btn btn-small" id="btn-next-page">Siguiente</button>
+                            </div>
+                        </div>
+
+                        <!-- Gráficos del Historial Filtrado -->
+                        <div class="history-charts-wrapper" style="margin-top: 32px; border-top: 1px solid var(--border-color); padding-top: 24px;">
+                            <h3 style="font-size: 15px; font-weight: 800; margin-bottom: 16px; color: var(--text-primary);">Análisis Estadístico del Historial Filtrado</h3>
+                            <div class="history-charts-grid">
+                                <div class="chart-card" style="background: #FFF; padding: 16px; border: 1px solid var(--border-color); border-radius: var(--border-radius-lg);">
+                                    <h4 style="font-size: 13px; font-weight: 700; margin-bottom: 12px; color: var(--text-primary);">Evolución del pH</h4>
+                                    <div style="height: 180px; position: relative;"><canvas id="historyPhChart"></canvas></div>
+                                </div>
+                                <div class="chart-card" style="background: #FFF; padding: 16px; border: 1px solid var(--border-color); border-radius: var(--border-radius-lg);">
+                                    <h4 style="font-size: 13px; font-weight: 700; margin-bottom: 12px; color: var(--text-primary);">Evolución del Cloro Residual</h4>
+                                    <div style="height: 180px; position: relative;"><canvas id="historyCloroChart"></canvas></div>
+                                </div>
+                                <div class="chart-card" style="background: #FFF; padding: 16px; border: 1px solid var(--border-color); border-radius: var(--border-radius-lg);">
+                                    <h4 style="font-size: 13px; font-weight: 700; margin-bottom: 12px; color: var(--text-primary);">Tendencia Sanitaria (Estados)</h4>
+                                    <div style="height: 180px; position: relative;"><canvas id="historyTrendChart"></canvas></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+                <?php endif; ?>
+
+                <!-- 6. REPORTES -->
+                <section id="reportes" class="tab-content">
+                    <!-- Tarjetas de Resumen de Reporte (KPIs) -->
+                    <div class="report-summary-cards" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px;">
+                        <div class="report-kpi-card" style="background-color: #FFFFFF; border-radius: var(--border-radius-md); padding: 16px; border: 1px solid var(--border-color); box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: 12px; transition: transform 0.2s ease;">
+                            <div style="background-color: rgba(37, 99, 235, 0.08); color: var(--color-primary); width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="20" height="20">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                    <polyline points="14 2 14 8 20 8"/>
+                                    <line x1="16" y1="13" x2="8" y2="13"/>
+                                    <line x1="16" y1="17" x2="8" y2="17"/>
+                                </svg>
+                            </div>
+                            <div>
+                                <span style="font-size: 11.5px; color: var(--text-secondary); font-weight: 600; display: block;">Muestras en Historial</span>
+                                <strong id="rep-kpi-muestras" style="font-size: 18px; font-weight: 800; color: var(--text-primary);">0</strong>
+                            </div>
+                        </div>
+                        <div class="report-kpi-card" style="background-color: #FFFFFF; border-radius: var(--border-radius-md); padding: 16px; border: 1px solid var(--border-color); box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: 12px; transition: transform 0.2s ease;">
+                            <div style="background-color: rgba(34, 197, 94, 0.08); color: var(--color-green); width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="20" height="20">
+                                    <path d="M12 22a7 7 0 0 0 7-7c0-4.3-7-11-7-11S5 10.7 5 15a7 7 0 0 0 7 7z"/>
+                                    <polyline points="9 15 11 17 15 13" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </div>
+                            <div>
+                                <span style="font-size: 11.5px; color: var(--text-secondary); font-weight: 600; display: block;">Potabilidad Promedio</span>
+                                <strong id="rep-kpi-potabilidad" style="font-size: 18px; font-weight: 800; color: var(--color-green-hover);">0%</strong>
+                            </div>
+                        </div>
+                        <div class="report-kpi-card" style="background-color: #FFFFFF; border-radius: var(--border-radius-md); padding: 16px; border: 1px solid var(--border-color); box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: 12px; transition: transform 0.2s ease;">
+                            <div style="background-color: rgba(239, 68, 68, 0.08); color: var(--color-red); width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="20" height="20">
+                                    <path d="M12 22a7 7 0 0 0 7-7c0-4.3-7-11-7-11S5 10.7 5 15a7 7 0 0 0 7 7z"/>
+                                    <line x1="12" y1="11" x2="12" y2="14" stroke-linecap="round"/>
+                                    <circle cx="12" cy="17" r="0.75" fill="currentColor"/>
+                                </svg>
+                            </div>
+                            <div>
+                                <span style="font-size: 11.5px; color: var(--text-secondary); font-weight: 600; display: block;">Alertas Sanitarias</span>
+                                <strong id="rep-kpi-alertas" style="font-size: 18px; font-weight: 800; color: var(--color-red-hover);">0 activas</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="reports-grid">
+                        <!-- Formulario de Configuración del Reporte -->
+                        <div class="report-options-card card shadow-soft">
+                            <div class="card-header border-bottom">
+                                <h3>Generación de Reportes Ejecutivos</h3>
+                                <p class="card-subtitle">Configura los parámetros para los reportes oficiales.</p>
+                            </div>
+                            <div class="card-body form-content">
+                                <div class="form-group">
+                                    <label>Título del Reporte PDF</label>
+                                    <input type="text" id="report-title" value="Reporte Ejecutivo de Calidad de Agua - Viva el Perú">
+                                </div>
+                                <div class="form-group">
+                                    <label>Entidad Evaluadora</label>
+                                    <input type="text" id="report-entity" value="Municipalidad Distrital - Comité de Salud y Agua">
+                                </div>
+                                <div class="form-group">
+                                    <label>Responsable del Informe</label>
+                                    <input type="text" id="report-author" value="Ing. Sanitario de Guardia">
+                                </div>
+                                <div class="form-group">
+                                    <label>Secciones a Incluir en el PDF</label>
+                                    <div class="checkbox-group">
+                                        <label class="checkbox-option">
+                                            <input type="checkbox" id="rep-inc-stats" checked>
+                                            <span>Resumen de Estadísticas Clave</span>
+                                        </label>
+                                        <label class="checkbox-option">
+                                            <input type="checkbox" id="rep-inc-viviendas" checked>
+                                            <span id="report-viviendas-count-label">Detalle de las Viviendas Monitoreadas</span>
+                                        </label>
+                                        <label class="checkbox-option">
+                                            <input type="checkbox" id="rep-inc-alerts" checked>
+                                            <span>Alertas Activas y Críticas</span>
+                                        </label>
+                                        <label class="checkbox-option">
+                                            <input type="checkbox" id="rep-inc-history" checked>
+                                            <span>Historial Completo de Muestreos</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="report-download-actions">
+                                    <button class="btn btn-primary btn-large btn-full-width" id="btn-generate-pdf">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                            <polyline points="14 2 14 8 20 8"/>
+                                            <line x1="16" y1="13" x2="8" y2="13"/>
+                                            <line x1="16" y1="17" x2="8" y2="17"/>
+                                            <polyline points="10 9 9 9 8 9"/>
+                                        </svg>
+                                        Generar Reporte en PDF Profesional (jsPDF)
+                                    </button>
+                                    <button class="btn btn-secondary btn-large btn-full-width" id="btn-generate-csv">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                            <polyline points="7 10 12 15 17 10"/>
+                                            <line x1="12" y1="15" x2="12" y2="3"/>
+                                        </svg>
+                                        Exportar Base de Datos a CSV
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Vista Previa del Reporte PDF -->
+                        <div class="report-preview-sheet-card card shadow-soft" style="display: flex; flex-direction: column;">
+                            <div class="card-header border-bottom">
+                                <h3>Vista Previa del Reporte PDF</h3>
+                                <p class="card-subtitle">Vista preliminar interactiva de la hoja oficial membretada.</p>
+                            </div>
+                            <div class="card-body" style="padding: 24px; background-color: var(--bg-primary); display: flex; justify-content: center; align-items: flex-start; flex-grow: 1;">
+                                <div class="report-preview-sheet" style="background-color: #FFFFFF; border-radius: var(--border-radius-md); border: 1px solid var(--border-color); padding: 32px; font-family: 'Inter', sans-serif; box-shadow: var(--shadow-sm); width: 100%; max-width: 440px; min-height: 480px; display: flex; flex-direction: column; justify-content: space-between; position: relative;">
+                                    <!-- Hoja Membretada Virtual -->
+                                    <div>
+                                        <div class="virtual-pdf-header" style="border-bottom: 2px solid #1E293B; padding-bottom: 12px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
+                                            <div>
+                                                <h4 id="prev-entity" style="font-size: 10px; font-weight: 800; text-transform: uppercase; color: #1E293B; letter-spacing: 0.05em; margin: 0;">MUNICIPALIDAD DISTRITAL - COMITÉ DE SALUD Y AGUA</h4>
+                                                <span style="font-size: 8px; color: var(--text-secondary); display: block; margin-top: 2px;">Dirección Regional de Salud Ambiental - Cusco</span>
+                                            </div>
+                                            <div style="text-align: right; flex-shrink: 0; padding-left: 10px;">
+                                                <span id="prev-date" style="font-size: 8.5px; font-weight: 700; color: var(--text-secondary);">Fecha: --/--/----</span>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="virtual-pdf-body">
+                                            <h2 id="prev-title" style="font-size: 13px; font-weight: 800; color: #0f172a; text-align: center; margin: 0 0 16px 0; text-transform: uppercase; letter-spacing: 0.02em; line-height: 1.4;">REPORTE EJECUTIVO DE CALIDAD DE AGUA - VIVA EL PERÚ</h2>
+                                            
+                                            <div class="virtual-pdf-meta-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 9px; color: var(--text-primary); background-color: var(--bg-primary); padding: 8px 12px; border-radius: 6px; margin-bottom: 20px; border: 1px solid var(--border-color);">
+                                                <div>
+                                                    <strong>Responsable:</strong> <span id="prev-author">Ing. Sanitario de Guardia</span>
+                                                </div>
+                                                <div>
+                                                    <strong>Viviendas:</strong> <span id="prev-total-viv">0 viviendas</span>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="virtual-pdf-sections-preview" style="font-size: 10px; color: var(--text-secondary); line-height: 1.5; display: flex; flex-direction: column; gap: 10px;">
+                                                <div id="prev-sec-stats" style="border-left: 3px solid var(--color-primary); padding-left: 8px;">
+                                                    <strong style="color: var(--text-primary);">📊 Sección: Resumen de Estadísticas Clave</strong>
+                                                    <div style="font-size: 8.5px; color: var(--text-secondary); margin-top: 2px;">Porcentajes de potabilidad y promedios físico-químicos semanales.</div>
+                                                </div>
+                                                <div id="prev-sec-viviendas" style="border-left: 3px solid var(--color-primary); padding-left: 8px;">
+                                                    <strong style="color: var(--text-primary);">🏠 Sección: Detalle de Viviendas Monitoreadas</strong>
+                                                    <div style="font-size: 8.5px; color: var(--text-secondary); margin-top: 2px;">Lista detallada con estados sanitarios y coordenadas.</div>
+                                                </div>
+                                                <div id="prev-sec-alerts" style="border-left: 3px solid var(--color-primary); padding-left: 8px;">
+                                                    <strong style="color: var(--text-primary);">🚨 Sección: Alertas Activas y Críticas</strong>
+                                                    <div style="font-size: 8.5px; color: var(--text-secondary); margin-top: 2px;">Desglose de viviendas críticas y preventivas activas.</div>
+                                                </div>
+                                                <div id="prev-sec-history" style="border-left: 3px solid var(--color-primary); padding-left: 8px;">
+                                                    <strong style="color: var(--text-primary);">📅 Sección: Historial Completo de Muestreos</strong>
+                                                    <div style="font-size: 8.5px; color: var(--text-secondary); margin-top: 2px;">Historial de todas las mediciones ordenadas cronológicamente.</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="virtual-pdf-footer" style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 20px; text-align: center; font-size: 8px; color: var(--text-secondary);">
+                                        <span>Este documento es una vista previa interactiva. Pulse el botón para exportar.</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Resumen Informativo para Exposición / Información Institucional -->
+                    <div class="report-preview-info card shadow-soft" style="margin-top: 24px;">
+                        <div class="card-header border-bottom">
+                            <h3>Información Institucional y Académica</h3>
+                            <p class="card-subtitle">Detalles clave para la exposición universitaria de ingeniería o salud pública.</p>
+                        </div>
+                        <div class="card-body reports-info-body">
+                            <div class="info-block">
+                                <h4>Normativa Peruana Aplicada</h4>
+                                <p>Este sistema implementa las reglas del <strong>Reglamento de la Calidad del Agua para Consumo Humano (D.S. N° 031-2010-SA)</strong> de DIGESA, Perú:</p>
+                                <ul>
+                                    <li><strong>Cloro Residual Libre:</strong> Entre 0.5 y 1.5 mg/L para garantizar la desinfección frente a bacterias y virus.</li>
+                                    <li><strong>pH (Potencial de Hidrógeno):</strong> Rango óptimo entre 6.5 y 8.5. pH extremos causan corrosión o incrustación en tuberías y afectan el sabor.</li>
+                                </ul>
+                            </div>
+                            <div class="info-block border-top" style="padding-top: 20px; margin-top: 20px;">
+                                <h4>Metodología de Monitoreo - Viva el Perú</h4>
+                                <p>Las coordenadas y viviendas simulan la topografía y distribución de la urbanización **Viva el Perú** en el distrito de Santiago, Cusco. La simulación permite a los estudiantes y evaluadores ver la propagación espacial de un posible brote de contaminación o fallas en el sistema de cloración comunitaria.</p>
+                            </div>
+                            <div class="info-block border-top" style="padding-top: 20px; margin-top: 20px;">
+                                <h4>Estructura del PDF Exportado</h4>
+                                <p>El reporte de jsPDF está diseñado programáticamente para simular una hoja membretada municipal de Cusco, con tablas organizadas de indicadores generales y desgloses de alertas.</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 7. ADMINISTRAR VIVIENDAS -->
+                <?php if ($usuario_rol === 'ADMINISTRADOR' || $usuario_rol === 'OPERADOR'): ?>
+                <section id="administrar" class="tab-content">
+                    <!-- Tarjetas de Estadísticas Rápidas en la parte superior -->
+                    <div class="admin-stats-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 20px;">
+                        <div class="stat-card" style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 16px; box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: 12px; transition: transform var(--transition-fast), box-shadow var(--transition-fast);">
+                            <div class="stat-icon" style="background: var(--color-primary-light); color: var(--color-primary); width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px;">🏠</div>
+                            <div>
+                                <div style="font-size: 11px; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em;">Total Viviendas</div>
+                                <div id="admin-stat-total" style="font-size: 20px; font-weight: 800; color: var(--text-primary); margin-top: 2px;">0</div>
+                            </div>
+                        </div>
+                        <div class="stat-card" style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 16px; box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: 12px; transition: transform var(--transition-fast), box-shadow var(--transition-fast);">
+                            <div class="stat-icon" style="background: var(--color-green-light); color: var(--color-green-hover); width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px;">🟢</div>
+                            <div>
+                                <div style="font-size: 11px; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em;">Agua Apta</div>
+                                <div id="admin-stat-aptas" style="font-size: 20px; font-weight: 800; color: var(--color-green-hover); margin-top: 2px;">0</div>
+                            </div>
+                        </div>
+                        <div class="stat-card" style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 16px; box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: 12px; transition: transform var(--transition-fast), box-shadow var(--transition-fast);">
+                            <div class="stat-icon" style="background: var(--color-yellow-light); color: var(--color-yellow-hover); width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px;">🟡</div>
+                            <div>
+                                <div style="font-size: 11px; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em;">Observación</div>
+                                <div id="admin-stat-observadas" style="font-size: 20px; font-weight: 800; color: var(--color-yellow-hover); margin-top: 2px;">0</div>
+                            </div>
+                        </div>
+                        <div class="stat-card" style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 16px; box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: 12px; transition: transform var(--transition-fast), box-shadow var(--transition-fast);">
+                            <div class="stat-icon" style="background: var(--color-red-light); color: var(--color-red-hover); width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px;">🔴</div>
+                            <div>
+                                <div style="font-size: 11px; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em;">Riesgo Crítico</div>
+                                <div id="admin-stat-criticas" style="font-size: 20px; font-weight: 800; color: var(--color-red-hover); margin-top: 2px;">0</div>
+                            </div>
+                        </div>
+                        <div class="stat-card" style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 16px; box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: 12px; transition: transform var(--transition-fast), box-shadow var(--transition-fast);">
+                            <div class="stat-icon" style="background: rgba(100, 116, 139, 0.08); color: var(--text-secondary); width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px;">⚪</div>
+                            <div>
+                                <div style="font-size: 11px; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em;">Sin Evaluar</div>
+                                <div id="admin-stat-sin-evaluar" style="font-size: 20px; font-weight: 800; color: var(--text-secondary); margin-top: 2px;">0</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="admin-layout card shadow-soft" style="overflow: visible;">
+                        <div class="card-header border-bottom flex-between" style="padding-bottom: 16px;">
+                            <div>
+                                <h3>Administrar Viviendas Registradas</h3>
+                                <p class="card-subtitle">Visualiza, edita o elimina las viviendas cargadas en el sistema de monitoreo de Viva el Perú.</p>
+                            </div>
+                        </div>
+
+                        <!-- Barra de Búsqueda y Filtros Premium Mejorados -->
+                        <div class="admin-filters-row" style="display: flex; flex-wrap: wrap; gap: 12px; padding: 16px 20px; background-color: var(--bg-primary); border-bottom: 1px solid var(--border-color); align-items: center; justify-content: space-between;">
+                            <div style="display: flex; flex-wrap: wrap; gap: 12px; flex-grow: 1; align-items: center;">
+                                <!-- Búsqueda -->
+                                <div class="search-box" style="position: relative; min-width: 280px; flex-grow: 1; max-width: 380px;">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="search-icon" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--text-secondary);">
+                                        <circle cx="11" cy="11" r="8"/>
+                                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                                    </svg>
+                                    <input type="text" id="admin-search" placeholder="Buscar por propietario, código o teléfono..." style="width: 100%; padding-left: 32px; font-size: 13px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color); outline: none; padding-top: 8px; padding-bottom: 8px; background: var(--bg-card); transition: border-color var(--transition-fast);">
+                                </div>
+                                
+                                <!-- Filtro de Sector -->
+                                <select id="admin-filter-sector" style="padding: 8px 12px; font-size: 13px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color); outline: none; background: var(--bg-card); min-width: 160px; color: var(--text-primary); cursor: pointer;">
+                                    <option value="todos">Todos los Sectores</option>
+                                    <option value="Sector Viva el Perú">Sector Viva el Perú</option>
+                                    <option value="Sector Carmen Alto">Sector Carmen Alto</option>
+                                    <option value="Sector Sacsayhuamán">Sector Sacsayhuamán</option>
+                                    <option value="Asoc. Inti Raymi">Asoc. Inti Raymi</option>
+                                    <option value="Asoc. San Martín">Asoc. San Martín</option>
+                                </select>
+
+                                <!-- Filtro de Estado -->
+                                <select id="admin-filter-estado" style="padding: 8px 12px; font-size: 13px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color); outline: none; background: var(--bg-card); min-width: 150px; color: var(--text-primary); cursor: pointer;">
+                                    <option value="todos">Todos los Estados</option>
+                                    <option value="verde">🟢 Apta</option>
+                                    <option value="amarillo">🟡 Observación</option>
+                                    <option value="rojo">🔴 Riesgo Crítico</option>
+                                    <option value="gris">⚪ Sin Evaluar</option>
+                                </select>
+
+                                <!-- Filtro de Fecha del Último Análisis -->
+                                <div style="display: flex; align-items: center; gap: 8px; background: var(--bg-card); border: 1px solid var(--border-color); padding: 5px 12px; border-radius: var(--border-radius-md);">
+                                    <label for="admin-filter-date" style="font-size: 11px; color: var(--text-secondary); font-weight: 700; white-space: nowrap; text-transform: uppercase;">Último Análisis desde:</label>
+                                    <input type="date" id="admin-filter-date" style="border: none; outline: none; font-size: 12.5px; background: transparent; color: var(--text-primary); cursor: pointer;">
+                                </div>
+                            </div>
+
+
+                        </div>
+
+                        <!-- Contenedor Híbrido Dinámico (Tabla o Tarjetas) -->
+                        <div id="admin-view-container" style="padding: 20px 0;">
+                            <!-- Se inyecta por JS (Tabla o Tarjetas) -->
+                        </div>
+                    </div>
+                </section>
+                <?php endif; ?>
+
+                <!-- 8. BITÁCORA DE AUDITORÍA -->
+                <?php if ($usuario_rol === 'ADMINISTRADOR'): ?>
+                <section id="bitacora" class="tab-content">
+                    <div class="history-layout card shadow-soft">
+                        <div class="card-header border-bottom flex-between" style="align-items: center; gap: 16px;">
+                            <div>
+                                <h3>Bitácora de Auditoría del Sistema</h3>
+                                <p class="card-subtitle">Registro cronológico detallado de todas las actividades importantes del sistema.</p>
+                            </div>
+                        </div>
+
+                        <!-- Filtros de la Bitácora -->
+                        <div class="history-advanced-filters-bar" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; padding: 20px 24px; background-color: var(--bg-primary); border-bottom: 1px solid var(--border-color);">
+                            <div class="filter-group">
+                                <label for="bitacora-search">Búsqueda Rápida</label>
+                                <div class="search-box">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="search-icon" style="width: 16px; height: 16px;">
+                                        <circle cx="11" cy="11" r="8"/>
+                                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                                    </svg>
+                                    <input type="text" id="bitacora-search" placeholder="Buscar usuario, módulo, descripción...">
+                                </div>
+                            </div>
+                            <div class="filter-group">
+                                <label for="bitacora-filter-modulo">Filtrar por Módulo</label>
+                                <select id="bitacora-filter-modulo" style="width: 100%;">
+                                    <option value="todos">Todos los Módulos</option>
+                                    <option value="Viviendas">Viviendas</option>
+                                    <option value="Análisis">Análisis</option>
+                                    <option value="Historial">Historial</option>
+                                    <option value="Reportes">Reportes</option>
+                                    <option value="Alertas">Alertas</option>
+                                    <option value="Sistema">Sistema</option>
+                                </select>
+                                <style>
+                                    /* Fix select appearance consistency */
+                                    select#bitacora-filter-modulo {
+                                        padding: 8px 12px;
+                                        font-size: 13px;
+                                        border-radius: var(--border-radius-md);
+                                        border: 1px solid var(--border-color);
+                                        outline: none;
+                                        background: var(--bg-card);
+                                        color: var(--text-primary);
+                                        cursor: pointer;
+                                    }
+                                </style>
+                                
+                            </div>
+                            <div class="filter-group">
+                                <label for="bitacora-filter-date-from">Desde</label>
+                                <input type="date" id="bitacora-filter-date-from" style="width: 100%; padding: 7px 12px; font-size: 13px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary);">
+                            </div>
+                            <div class="filter-group">
+                                <label for="bitacora-filter-date-to">Hasta</label>
+                                <input type="date" id="bitacora-filter-date-to" style="width: 100%; padding: 7px 12px; font-size: 13px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary);">
+                            </div>
+                            <div class="filter-group" style="justify-content: flex-end; align-items: flex-end;">
+                                <button type="button" class="btn btn-secondary" id="btn-clear-bitacora-filters" style="height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 600; width: 100%;">
+                                    🔄 Limpiar
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Tabla de Datos -->
+                        <div class="table-container history-table-wrapper" style="overflow-x: auto; padding: 0 20px;">
+                            <table class="table-premium" style="width: 100%; border-collapse: separate; border-spacing: 0;">
+                                <thead>
+                                    <tr>
+                                        <th style="text-align: left; width: 155px; padding: 12px 16px;">Fecha / Hora</th>
+                                        <th style="text-align: left; width: 165px; padding: 12px 16px;">Usuario</th>
+                                        <th style="text-align: center; width: 120px; padding: 12px 16px;">Módulo</th>
+                                        <th style="text-align: center; width: 165px; padding: 12px 16px;">Acción</th>
+                                        <th style="text-align: left; padding: 12px 16px;">Descripción</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="bitacora-table-tbody">
+                                    <!-- Se inyecta dinámicamente por JS -->
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Paginación -->
+                        <div class="table-pagination" style="display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; border-top: 1px solid var(--border-color);">
+                            <span class="pagination-info" id="bitacora-pagination-info" style="font-size: 13px; color: var(--text-secondary); font-weight: 600;">Mostrando 0-0 de 0 logs</span>
+                            <div class="pagination-buttons" style="display: flex; gap: 8px;">
+                                <button type="button" class="btn btn-secondary btn-small" id="bitacora-pagination-prev" style="min-width: 80px;">Anterior</button>
+                                <button type="button" class="btn btn-secondary btn-small" id="bitacora-pagination-next" style="min-width: 80px;">Siguiente</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+                <?php endif; ?>
+
+                <!-- 9. GESTIÓN DE USUARIOS (Solo visible para ADMIN) -->
+                <?php if ($usuario_rol === 'ADMINISTRADOR'): ?>
+                <section id="usuarios" class="tab-content">
+                    <div class="tab-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding: 0 20px;">
+                        <div>
+                            <p class="tab-subtitle" style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">Administración de brigadistas, analistas y perfiles de acceso.</p>
+                        </div>
+                        <button type="button" class="btn btn-primary" id="btn-nuevo-usuario" style="display: inline-flex; align-items: center; gap: 8px;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                                <circle cx="9" cy="7" r="4"/>
+                                <line x1="19" y1="8" x2="19" y2="14"/>
+                                <line x1="16" y1="11" x2="22" y2="11"/>
+                            </svg>
+                            Nuevo Usuario
+                        </button>
+                    </div>
+
+                    <div class="card shadow-soft" style="background-color: var(--bg-card); border-radius: var(--border-radius-lg); border: 1px solid var(--border-color); overflow: hidden; margin: 0 20px 24px 20px;">
+                        <!-- Filtros del Listado de Usuarios -->
+                        <div class="table-filters" style="display: flex; flex-wrap: wrap; gap: 16px; padding: 20px 24px; border-bottom: 1px solid var(--border-color); background-color: #FAFAFA; align-items: center;">
+                            <div style="flex: 1; min-width: 250px; position: relative; display: flex; align-items: center;">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="position: absolute; left: 12px; width: 16px; height: 16px; color: var(--text-light); z-index: 1;">
+                                    <circle cx="11" cy="11" r="8"></circle>
+                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                </svg>
+                                <input type="text" id="user-search" placeholder="Buscar por nombre o correo..." style="width: 100%; padding: 8px 12px 8px 36px; font-size: 13px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color); outline: none; transition: border-color 0.2s;">
+                            </div>
+                            <div style="width: 180px;">
+                                <select id="user-filter-rol" style="width: 100%; padding: 8px 12px; font-size: 13px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary);">
+                                    <option value="todos">Todos los Roles</option>
+                                    <option value="ADMINISTRADOR">Administrador</option>
+                                    <option value="OPERADOR">Operador</option>
+                                    <option value="INVITADO">Invitado</option>
+                                </select>
+                            </div>
+                            <div style="width: 180px;">
+                                <select id="user-filter-estado" style="width: 100%; padding: 8px 12px; font-size: 13px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary);">
+                                    <option value="todos">Todos los Estados</option>
+                                    <option value="1">Activos</option>
+                                    <option value="0">Inactivos</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Tabla de Usuarios -->
+                        <div class="table-container" style="overflow-x: auto; padding: 0;">
+                            <table class="table-premium" style="width: 100%; border-collapse: separate; border-spacing: 0;">
+                                <thead>
+                                    <tr>
+                                        <th style="text-align: left; padding: 12px 24px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); background: #FAFBFD; border-bottom: 1px solid var(--border-color);">Nombre</th>
+                                        <th style="text-align: left; padding: 12px 16px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); background: #FAFBFD; border-bottom: 1px solid var(--border-color);">Correo</th>
+                                        <th style="text-align: center; padding: 12px 16px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); background: #FAFBFD; border-bottom: 1px solid var(--border-color); width: 150px;">Rol</th>
+                                        <th style="text-align: center; padding: 12px 16px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); background: #FAFBFD; border-bottom: 1px solid var(--border-color); width: 120px;">Estado</th>
+                                        <th style="text-align: left; padding: 12px 16px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); background: #FAFBFD; border-bottom: 1px solid var(--border-color);">Último Acceso</th>
+                                        <th style="text-align: center; padding: 12px 24px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); background: #FAFBFD; border-bottom: 1px solid var(--border-color); width: 150px;">Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="usuarios-table-tbody">
+                                    <!-- Se inyecta por JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+                <?php endif; ?>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- MODAL DE NOTIFICACIÓN DE ÉXITO O DETALLE -->
+    <div class="modal-overlay" id="notification-modal">
+        <div class="modal-card card">
+            <div class="modal-header border-bottom">
+                <h3 id="modal-title">Resultado de Evaluación</h3>
+                <button class="btn-close-modal" id="btn-close-modal" aria-label="Cerrar">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body-content">
+                <!-- Se inyecta por JS -->
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" id="btn-modal-accept">Aceptar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: EDITAR VIVIENDA -->
+    <div class="modal-overlay" id="edit-vivienda-modal">
+        <div class="modal-card card" style="max-width: 500px;">
+            <div class="modal-header border-bottom">
+                <h3>Editar Detalles de Vivienda</h3>
+                <button class="btn-close-modal" id="btn-close-edit-modal">&times;</button>
+            </div>
+            <div class="modal-body form-content" style="padding: 20px; display:flex; flex-direction:column; gap:12px;">
+                <input type="hidden" id="edit-viv-id">
+                <div class="form-group" style="display:flex; flex-direction:column; gap:6px;">
+                    <label for="edit-viv-propietario" class="question-label" style="font-size:12.5px; font-weight:700;">Propietario / Familia *</label>
+                    <input type="text" id="edit-viv-propietario" class="large-conversational-input" style="font-size:13.5px; font-weight: normal; padding: 8px 12px; border-radius:6px; border:1px solid var(--border-color); outline:none; width: 100%;">
+                </div>
+                <div class="form-group" style="display:flex; flex-direction:column; gap:6px;">
+                    <label for="edit-viv-direccion" class="question-label" style="font-size:12.5px; font-weight:700;">Dirección / Referencia *</label>
+                    <input type="text" id="edit-viv-direccion" class="large-conversational-input" style="font-size:13.5px; font-weight: normal; padding: 8px 12px; border-radius:6px; border:1px solid var(--border-color); outline:none; width: 100%;">
+                </div>
+                <div class="form-row" style="display:flex; gap:12px;">
+                    <div class="form-group col-50" style="flex:1; display:flex; flex-direction:column; gap:6px;">
+                        <label for="edit-viv-sector" class="question-label" style="font-size:12.5px; font-weight:700;">Sector / Manzana *</label>
+                        <select id="edit-viv-sector" style="padding: 8px 12px; font-size:13.5px; border-radius:6px; border:1px solid var(--border-color); outline:none; width: 100%;">
+                            <option value="Sector Viva el Perú">Sector Viva el Perú</option>
+                            <option value="Sector Carmen Alto">Sector Carmen Alto</option>
+                            <option value="Sector Sacsayhuamán">Sector Sacsayhuamán</option>
+                            <option value="Asoc. Inti Raymi">Asoc. Inti Raymi</option>
+                            <option value="Asoc. San Martín">Asoc. San Martín</option>
+                        </select>
+                    </div>
+                    <div class="form-group col-50" style="flex:1; display:flex; flex-direction:column; gap:6px;">
+                        <label for="edit-viv-telefono" class="question-label" style="font-size:12.5px; font-weight:700;">Teléfono</label>
+                        <input type="text" id="edit-viv-telefono" class="large-conversational-input" style="font-size:13.5px; font-weight: normal; padding: 8px 12px; border-radius:6px; border:1px solid var(--border-color); outline:none; width: 100%;">
+                    </div>
+                </div>
+                <div class="form-group" style="display:flex; flex-direction:column; gap:6px;">
+                    <label for="edit-viv-obs" class="question-label" style="font-size:12.5px; font-weight:700;">Observaciones</label>
+                    <textarea id="edit-viv-obs" rows="2" class="conversational-textarea" style="font-size:13px; border-radius:6px; border:1px solid var(--border-color); outline:none; padding:8px 12px; resize:none; width: 100%;"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content: flex-end; gap:12px; padding: 16px 20px; border-top: 1px solid var(--border-color);">
+                <button type="button" class="btn btn-secondary" id="btn-cancel-edit">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="btn-save-edit-vivienda">Guardar Cambios</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: DETALLES DE VIVIENDA -->
+    <div class="modal-overlay" id="admin-housing-detail-modal">
+        <div class="modal-card card" style="max-width: 650px;">
+            <div class="modal-header border-bottom">
+                <h3 id="detail-viv-title">Detalles de la Vivienda</h3>
+                <button class="btn-close-modal" id="btn-close-detail-viv-modal">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 20px; display: flex; flex-direction: column; gap: 16px;">
+                <!-- Fila de información general -->
+                <div class="detail-grid" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; background-color: var(--bg-primary); padding: 16px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color);">
+                    <div>
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-secondary); display: block; text-transform: uppercase;">Código Vivienda</span>
+                        <strong id="detail-viv-code" style="font-size: 14px; color: var(--text-primary);">VIV-000</strong>
+                    </div>
+                    <div>
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-secondary); display: block; text-transform: uppercase;">Estado Semáforo</span>
+                        <div id="detail-viv-status-badge" style="margin-top: 4px;">-</div>
+                    </div>
+                    <div>
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-secondary); display: block; text-transform: uppercase;">Propietario / Familia</span>
+                        <strong id="detail-viv-owner" style="font-size: 14px; color: var(--text-primary);">-</strong>
+                    </div>
+                    <div>
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-secondary); display: block; text-transform: uppercase;">Teléfono</span>
+                        <span id="detail-viv-phone" style="font-size: 13.5px; color: var(--text-primary);">-</span>
+                    </div>
+                    <div style="grid-column: span 2;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-secondary); display: block; text-transform: uppercase;">Dirección</span>
+                        <span id="detail-viv-address" style="font-size: 13.5px; color: var(--text-primary);">-</span>
+                    </div>
+                    <div>
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-secondary); display: block; text-transform: uppercase;">Sector / Manzana</span>
+                        <span id="detail-viv-sector" style="font-size: 13.5px; color: var(--text-primary);">-</span>
+                    </div>
+                    <div>
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-secondary); display: block; text-transform: uppercase;">Coordenadas GPS</span>
+                        <span id="detail-viv-coords" style="font-size: 12.5px; font-family: monospace; color: var(--text-primary);">-</span>
+                    </div>
+                    <div style="grid-column: span 2;">
+                        <span style="font-size: 11px; font-weight: 700; color: var(--text-secondary); display: block; text-transform: uppercase;">Observaciones Iniciales</span>
+                        <p id="detail-viv-obs" style="font-size: 13px; color: var(--text-secondary); line-height: 1.4; margin-top: 4px; font-style: italic;">-</p>
+                    </div>
+                </div>
+
+                <!-- Historial de Análisis -->
+                <div>
+                    <h4 style="font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 10px; display: flex; align-items: center; gap: 8px;">
+                        <span>📋</span> Historial de Análisis de Agua
+                    </h4>
+                    <div class="table-container" style="max-height: 200px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: var(--border-radius-md);">
+                        <table style="font-size: 12.5px;">
+                            <thead style="position: sticky; top: 0; background-color: var(--bg-primary); z-index: 2; box-shadow: inset 0 -1px 0 var(--border-color);">
+                                <tr>
+                                    <th style="padding: 8px 12px; background-color: var(--bg-primary);">Fecha</th>
+                                    <th style="padding: 8px 12px; background-color: var(--bg-primary);">Responsable</th>
+                                    <th style="padding: 8px 12px; text-align: center; background-color: var(--bg-primary);">pH</th>
+                                    <th style="padding: 8px 12px; text-align: center; background-color: var(--bg-primary);">Cloro</th>
+                                    <th style="padding: 8px 12px; text-align: center; background-color: var(--bg-primary);">Semáforo</th>
+                                </tr>
+                            </thead>
+                            <tbody id="detail-viv-history-tbody">
+                                <tr><td colspan="5" style="text-align: center; padding: 20px; color: var(--text-secondary);">No hay análisis registrados para esta vivienda.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-top: 1px solid var(--border-color);">
+                <!-- Enlace para centrar en el mapa principal -->
+                <button type="button" class="btn btn-secondary" id="btn-detail-viv-show-on-map" style="display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--color-primary); border-color: var(--color-primary-light); background-color: var(--color-primary-light);">
+                    📍 Centrar en Mapa Principal
+                </button>
+                <button type="button" class="btn btn-primary" id="btn-close-detail-viv-accept">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: REUBICAR VIVIENDA -->
+    <div class="modal-overlay" id="relocate-vivienda-modal">
+        <div class="modal-card card" style="max-width: 600px;">
+            <div class="modal-header border-bottom">
+                <h3 id="relocate-modal-title">Modificar Ubicación de Vivienda</h3>
+                <button class="btn-close-modal" id="btn-close-relocate-modal">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 20px;">
+                <input type="hidden" id="relocate-viv-id">
+                <p class="help-text" style="margin-bottom: 12px; font-size:12px; color: var(--text-secondary);">Arrastra el pin en el mapa para ajustar la ubicación geográfica exacta en Viva el Perú.</p>
+                <div id="relocate-vivienda-map" style="height: 300px; border-radius: 8px; border: 1px solid var(--border-color); z-index:1;"></div>
+                <div class="form-row" style="display:flex; gap:12px; margin-top: 12px;">
+                    <div class="form-group col-50" style="flex:1;">
+                        <label style="font-size:11px; font-weight:700; color:var(--text-secondary); display:block; margin-bottom:4px;">Latitud</label>
+                        <input type="text" id="relocate-viv-lat" readonly class="large-conversational-input" style="font-size:13px; font-weight:normal; padding:8px; border-radius:6px; border:1px solid var(--border-color); outline:none; background-color: var(--bg-primary); width: 100%;">
+                    </div>
+                    <div class="form-group col-50" style="flex:1;">
+                        <label style="font-size:11px; font-weight:700; color:var(--text-secondary); display:block; margin-bottom:4px;">Longitud</label>
+                        <input type="text" id="relocate-viv-lng" readonly class="large-conversational-input" style="font-size:13px; font-weight:normal; padding:8px; border-radius:6px; border:1px solid var(--border-color); outline:none; background-color: var(--bg-primary); width: 100%;">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content: flex-end; gap:12px; padding: 16px 20px; border-top: 1px solid var(--border-color);">
+                <button type="button" class="btn btn-secondary" id="btn-relocate-show-on-map" style="display: flex; align-items: center; gap: 6px; font-weight: 600; color: var(--color-primary); border-color: var(--color-primary-light); background-color: var(--color-primary-light); margin-right: auto;">
+                    📍 Centrar en Mapa
+                </button>
+                <button type="button" class="btn btn-secondary" id="btn-cancel-relocate">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="btn-save-relocate-vivienda">Actualizar Ubicación</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PANEL DETALLE DE ALERTA (DRAWER) -->
+    <div class="drawer-overlay" id="alert-detail-drawer">
+        <div class="drawer-content">
+            <div class="drawer-header">
+                <h3>Detalle de Alerta Sanitaria</h3>
+                <button class="btn-close-drawer" id="btn-close-drawer" aria-label="Cerrar">&times;</button>
+            </div>
+            <div class="drawer-body" id="drawer-body-content">
+                <!-- Se inyecta dinámicamente por JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: EDITAR REGISTRO DE HISTORIAL -->
+    <div class="modal-overlay" id="history-edit-modal">
+        <div class="modal-card card" style="max-width: 500px;">
+            <div class="modal-header border-bottom">
+                <h3>Editar Registro de Análisis</h3>
+                <button class="btn-close-modal" id="btn-close-history-edit-modal">&times;</button>
+            </div>
+            <div class="modal-body form-content" style="padding: 20px; display:flex; flex-direction:column; gap:12px;">
+                <input type="hidden" id="edit-hist-idx">
+                <div class="form-group" style="display:flex; flex-direction:column; gap:6px;">
+                    <label for="edit-hist-responsable" class="question-label" style="font-size:12.5px; font-weight:700;">Responsable Técnico *</label>
+                    <input type="text" id="edit-hist-responsable" class="large-conversational-input" style="font-size:13.5px; font-weight: normal; padding: 8px 12px; border-radius:6px; border:1px solid var(--border-color); outline:none; width: 100%;">
+                </div>
+                <div class="form-row" style="display:flex; gap:12px;">
+                    <div class="form-group col-50" style="flex:1; display:flex; flex-direction:column; gap:6px;">
+                        <label for="edit-hist-ph" class="question-label" style="font-size:12.5px; font-weight:700;">pH * (2.0 - 14.0)</label>
+                        <input type="number" id="edit-hist-ph" step="0.1" min="2" max="14" style="padding: 8px 12px; font-size:13.5px; border-radius:6px; border:1px solid var(--border-color); outline:none; width: 100%;">
+                    </div>
+                    <div class="form-group col-50" style="flex:1; display:flex; flex-direction:column; gap:6px;">
+                        <label for="edit-hist-cloro" class="question-label" style="font-size:12.5px; font-weight:700;">Cloro Residual * (mg/L)</label>
+                        <input type="number" id="edit-hist-cloro" step="0.01" min="0" max="5" style="padding: 8px 12px; font-size:13.5px; border-radius:6px; border:1px solid var(--border-color); outline:none; width: 100%;">
+                    </div>
+                </div>
+                <div class="form-group" style="display:flex; flex-direction:column; gap:6px;">
+                    <label for="edit-hist-fecha" class="question-label" style="font-size:12.5px; font-weight:700;">Fecha y Hora *</label>
+                    <input type="text" id="edit-hist-fecha" placeholder="YYYY-MM-DD HH:MM" style="padding: 8px 12px; font-size:13.5px; border-radius:6px; border:1px solid var(--border-color); outline:none; width: 100%;">
+                </div>
+                <div class="form-group" style="display:flex; flex-direction:column; gap:6px;">
+                    <label for="edit-hist-obs" class="question-label" style="font-size:12.5px; font-weight:700;">Observaciones</label>
+                    <textarea id="edit-hist-obs" rows="2" class="conversational-textarea" style="font-size:13px; border-radius:6px; border:1px solid var(--border-color); outline:none; padding:8px 12px; resize:none; width: 100%;"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content: flex-end; gap:12px; padding: 16px 20px; border-top: 1px solid var(--border-color);">
+                <button type="button" class="btn btn-secondary" id="btn-cancel-history-edit">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="btn-save-history-edit">Guardar Cambios</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: DETALLE DE HISTORIAL CON MAPA Y TIMELINE -->
+    <div class="modal-overlay" id="history-detail-modal">
+        <div class="modal-card card" style="max-width: 600px; width: 90%; max-height: 90vh; display:flex; flex-direction:column; padding: 0;">
+            <div class="modal-header border-bottom" style="padding: 20px; margin-bottom: 0;">
+                <h3 id="detail-hist-title">Detalle Completo de Evaluación</h3>
+                <button class="btn-close-modal" id="btn-close-history-detail-modal">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 20px; overflow-y: auto; display:flex; flex-direction:column; gap:16px; flex-grow: 1;">
+                <div class="drawer-vivienda-header" style="background-color: var(--bg-primary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 16px;">
+                    <h4 id="detail-hist-vivienda-name" style="font-size: 15px; font-weight: 800; color: var(--text-primary); margin-bottom: 4px;">--</h4>
+                    <span id="detail-hist-vivienda-code" style="font-size: 12px; color: var(--text-secondary); display: block;">--</span>
+                    <span id="detail-hist-vivienda-address" style="font-size: 12px; color: var(--text-secondary); display: block;">--</span>
+                </div>
+
+                <div class="drawer-specs-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                    <div class="drawer-spec-card" style="background-color: #F8FAFC; border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 12px; text-align: center;">
+                        <span class="lbl" style="font-size: 10px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase;">pH</span>
+                        <strong class="val" id="detail-hist-ph" style="font-size: 20px; font-weight: 800; color: var(--text-primary); margin-top: 4px;">--</strong>
+                    </div>
+                    <div class="drawer-spec-card" style="background-color: #F8FAFC; border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 12px; text-align: center;">
+                        <span class="lbl" style="font-size: 10px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase;">Cloro Residual</span>
+                        <strong class="val" id="detail-hist-cloro" style="font-size: 20px; font-weight: 800; color: var(--text-primary); margin-top: 4px;">-- mg/L</strong>
+                    </div>
+                </div>
+
+                <div class="drawer-info-list" style="display: flex; flex-direction: column; gap: 8px;">
+                    <div class="drawer-info-row" style="display: flex; justify-content: space-between; font-size: 12.5px;">
+                        <span class="lbl" style="color: var(--text-secondary); font-weight: 500;">Responsable:</span>
+                        <span class="val" id="detail-hist-responsable" style="color: var(--text-primary); font-weight: 600;">--</span>
+                    </div>
+                    <div class="drawer-info-row" style="display: flex; justify-content: space-between; font-size: 12.5px;">
+                        <span class="lbl" style="color: var(--text-secondary); font-weight: 500;">Fecha y Hora:</span>
+                        <span class="val" id="detail-hist-fecha" style="color: var(--text-primary); font-weight: 600;">--</span>
+                    </div>
+                    <div class="drawer-info-row" style="display: flex; justify-content: space-between; font-size: 12.5px;">
+                        <span class="lbl" style="color: var(--text-secondary); font-weight: 500;">Estado Sanitario:</span>
+                        <span class="val" id="detail-hist-estado">--</span>
+                    </div>
+                    <div class="drawer-info-row" style="display: flex; justify-content: space-between; font-size: 12.5px;">
+                        <span class="lbl" style="color: var(--text-secondary); font-weight: 500;">Coordenadas:</span>
+                        <span class="val" id="detail-hist-coordenadas" style="color: var(--text-primary); font-weight: 600; font-family: monospace;">--</span>
+                    </div>
+                </div>
+
+                <div class="drawer-recommendations" id="detail-hist-recommendations" style="background-color: var(--bg-primary); border-radius: var(--border-radius-md); padding: 14px; font-size: 12.5px; line-height: 1.4; border-left: 4px solid var(--color-green);">
+                    <h5 style="font-size: 13px; font-weight: 700; margin-bottom: 8px;">Recomendaciones Técnicas</h5>
+                    <p id="detail-hist-recs-desc">--</p>
+                    <ul id="detail-hist-recs-list" style="list-style-position: inside; display: flex; flex-direction: column; gap: 4px; margin-top: 4px;"></ul>
+                </div>
+
+                <div class="form-group" style="display:flex; flex-direction:column; gap:6px;">
+                    <label class="question-label" style="font-size:12.5px; font-weight:700;">Ubicación en el Mapa</label>
+                    <div id="history-detail-minimap" style="height: 180px; border-radius: 8px; border: 1px solid var(--border-color); z-index:1;"></div>
+                </div>
+
+                <div class="form-group" style="display:flex; flex-direction:column; gap:6px;">
+                    <label class="question-label" style="font-size:12.5px; font-weight:700;">Evolución Sanitaria Histórica</label>
+                    <div class="history-detail-timeline" id="detail-hist-timeline" style="display: flex; gap: 12px; align-items: center; background-color: var(--bg-primary); padding: 12px; border-radius: 8px; overflow-x: auto;">
+                        <!-- Se carga cronológicamente -->
+                    </div>
+                </div>
+
+                <div class="form-group" style="display:flex; flex-direction:column; gap:6px;">
+                    <label class="question-label" style="font-size:12.5px; font-weight:700;">Observaciones</label>
+                    <p id="detail-hist-observaciones" style="font-size: 12px; color: var(--text-secondary); background: #f8fafc; border: 1px solid #e2e8f0; border-radius:4px; padding:8px;">--</p>
+                </div>
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content: flex-end; padding: 16px 20px; border-top: 1px solid var(--border-color);">
+                <button type="button" class="btn btn-primary" id="btn-close-history-detail-accept">Aceptar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DE CONFIRMACIÓN DE ELIMINACIÓN INDIVIDUAL -->
+    <div class="modal-overlay" id="history-delete-confirm-modal">
+        <div class="modal-card card" style="max-width: 400px;">
+            <div class="modal-header border-bottom">
+                <h3 style="color: var(--color-red-hover); font-weight:800; font-size:16px;">¿Eliminar Análisis?</h3>
+                <button class="btn-close-modal" id="btn-close-delete-confirm-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:13px; color: var(--text-primary);">¿Está seguro de eliminar este análisis?<br>Esta acción no puede deshacerse.</p>
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content: flex-end; gap:12px; padding: 16px 20px;">
+                <button type="button" class="btn btn-secondary" id="btn-cancel-delete-confirm">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="btn-confirm-delete-action" style="background-color: var(--color-red); border-color: var(--color-red);">Eliminar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DE DOBLE CONFIRMACIÓN DE ELIMINACIÓN COMPLETA -->
+    <div class="modal-overlay" id="history-clear-all-modal">
+        <div class="modal-card card" style="max-width: 400px;">
+            <div class="modal-header border-bottom">
+                <h3 style="color: var(--color-red-hover); font-weight:800; font-size:16px;" id="clear-all-title">Eliminar Historial</h3>
+                <button class="btn-close-modal" id="btn-close-clear-all-modal">&times;</button>
+            </div>
+            <div class="modal-body" id="clear-all-body">
+                <!-- Se inyecta mensaje según el paso -->
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content: flex-end; gap:12px; padding: 16px 20px;">
+                <button type="button" class="btn btn-secondary" id="btn-cancel-clear-all">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="btn-confirm-clear-all" style="background-color: var(--color-red); border-color: var(--color-red);">Continuar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DE CONFIRMACIÓN DE ELIMINACIÓN DE USUARIOS -->
+    <?php if ($usuario_rol === 'ADMINISTRADOR'): ?>
+    <div class="modal-overlay" id="user-delete-confirm-modal">
+        <div class="modal-card card" style="max-width: 400px;">
+            <div class="modal-header border-bottom">
+                <h3 style="color: var(--color-red-hover); font-weight:800; font-size:16px;">¿Eliminar Usuario?</h3>
+                <button class="btn-close-modal" id="btn-close-user-delete-modal">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 20px;">
+                <p style="font-size:13.5px; color: var(--text-primary); line-height: 1.4; margin-bottom: 0;">
+                    ⚠ ¿Está seguro de eliminar permanentemente este usuario?<br><br>
+                    Esta acción no se puede deshacer.
+                </p>
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content: flex-end; gap:12px; padding: 16px 20px;">
+                <button type="button" class="btn btn-secondary" id="btn-cancel-user-delete">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="btn-confirm-user-delete" style="background-color: var(--color-red); border-color: var(--color-red); color: #FFFFFF;">Eliminar definitivamente</button>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- MODAL: GESTIÓN DE USUARIOS (CREAR / EDITAR) -->
+    <?php if ($usuario_rol === 'ADMINISTRADOR'): ?>
+    <div class="modal-overlay" id="user-form-modal">
+        <div class="modal-card card" style="max-width: 480px;">
+            <div class="modal-header border-bottom">
+                <h3 id="user-form-title">Crear Nuevo Usuario</h3>
+                <button class="btn-close-modal" id="btn-close-user-form-modal">&times;</button>
+            </div>
+            <div class="modal-body form-content" style="padding: 20px; display:flex; flex-direction:column; gap:14px;">
+                <input type="hidden" id="form-user-id">
+                
+                <div class="form-group" style="display:flex; flex-direction:column; gap:4px;">
+                    <label for="form-user-name" class="question-label" style="font-size:12.5px; font-weight:700; color: var(--text-primary);">Nombre Completo *</label>
+                    <input type="text" id="form-user-name" class="large-conversational-input" placeholder="Ej. Juan Pérez" style="font-size:13.5px; padding: 8px 12px; border-radius:6px; border:1px solid var(--border-color); outline:none; width: 100%;">
+                </div>
+
+                <div class="form-group" style="display:flex; flex-direction:column; gap:4px;">
+                    <label for="form-user-email" class="question-label" style="font-size:12.5px; font-weight:700; color: var(--text-primary);">Correo Electrónico *</label>
+                    <input type="email" id="form-user-email" class="large-conversational-input" placeholder="Ej. juan@semaforo.pe" style="font-size:13.5px; padding: 8px 12px; border-radius:6px; border:1px solid var(--border-color); outline:none; width: 100%;">
+                </div>
+
+                <div class="form-group" style="display:flex; flex-direction:column; gap:4px;">
+                    <label for="form-user-password" class="question-label" style="font-size:12.5px; font-weight:700; color: var(--text-primary);" id="label-user-password">Contraseña *</label>
+                    <input type="password" id="form-user-password" class="large-conversational-input" placeholder="Min. 6 caracteres" style="font-size:13.5px; padding: 8px 12px; border-radius:6px; border:1px solid var(--border-color); outline:none; width: 100%;">
+                    <small id="help-user-password" style="font-size: 11px; color: var(--text-secondary); display: none;">Deje en blanco para mantener la contraseña actual.</small>
+                </div>
+
+                <div class="form-row" style="display:flex; gap:12px;">
+                    <div class="form-group col-50" style="flex:1; display:flex; flex-direction:column; gap:4px;">
+                        <label for="form-user-rol" class="question-label" style="font-size:12.5px; font-weight:700; color: var(--text-primary);">Rol del Usuario *</label>
+                        <select id="form-user-rol" style="padding: 8px 12px; font-size:13.5px; border-radius:6px; border:1px solid var(--border-color); outline:none; width: 100%;">
+                            <option value="INVITADO">Invitado</option>
+                            <option value="OPERADOR">Operador</option>
+                            <option value="ADMINISTRADOR">Administrador</option>
+                        </select>
+                    </div>
+                    <div class="form-group col-50" style="flex:1; display:flex; flex-direction:column; gap:4px;">
+                        <label for="form-user-active" class="question-label" style="font-size:12.5px; font-weight:700; color: var(--text-primary);">Estado de la Cuenta</label>
+                        <select id="form-user-active" style="padding: 8px 12px; font-size:13.5px; border-radius:6px; border:1px solid var(--border-color); outline:none; width: 100%;">
+                            <option value="1">Activa (Habilitada)</option>
+                            <option value="0">Inactiva (Deshabilitada)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content: flex-end; gap:12px; padding: 16px 20px; border-top: 1px solid var(--border-color);">
+                <button type="button" class="btn btn-secondary" id="btn-cancel-user-form">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="btn-save-user">Guardar Usuario</button>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- MODAL: PERFIL DE USUARIO (MI PERFIL) -->
+    <div class="modal-overlay" id="profile-modal">
+        <div class="modal-card card" style="max-width: 760px; width: 95%;">
+            <div class="modal-header border-bottom flex-between">
+                <h3 style="font-weight: 800; font-size: 17px; color: var(--text-primary);">Mi Perfil de Acceso</h3>
+                <button class="btn-close-modal" id="btn-close-profile-modal">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 24px; display: grid; grid-template-columns: 1.1fr 1fr; gap: 28px; align-items: start; max-height: 70vh; overflow-y: auto;">
+                
+                <!-- Columna Izquierda: Datos Generales -->
+                <div style="display: flex; flex-direction: column; gap: 20px;">
+                    <h4 style="font-size: 13.5px; font-weight: 700; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.03em; border-left: 3px solid var(--color-primary); padding-left: 8px;">Datos Personales</h4>
+                    
+                    <!-- Sección Foto de Perfil -->
+                    <div style="display: flex; align-items: center; gap: 20px; background-color: var(--bg-primary); padding: 14px; border-radius: 10px; border: 1px dashed var(--border-color);">
+                        <div style="position: relative; width: 84px; height: 84px; border-radius: 50%; overflow: hidden; border: 3px solid #FFFFFF; box-shadow: 0 4px 10px rgba(0,0,0,0.08); flex-shrink: 0; cursor: pointer;" id="profile-avatar-container">
+                            <!-- Imagen de Perfil -->
+                            <img id="profile-avatar-img" src="" alt="Foto de Perfil" style="width: 100%; height: 100%; object-fit: cover; display: none;">
+                            <!-- Iniciales por Defecto -->
+                            <div id="profile-avatar-initials" style="width: 100%; height: 100%; background-color: var(--color-primary-light); color: var(--color-primary); display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 800; text-transform: uppercase;">
+                                U
+                            </div>
+                            <!-- Overlay Hover -->
+                            <div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.65); color: #FFFFFF; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; opacity: 0; transition: opacity var(--transition-fast);" id="profile-avatar-overlay">
+                                📷 Cambiar
+                            </div>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 8px; flex: 1;">
+                            <span style="font-size: 12.5px; font-weight: 700; color: var(--text-primary);">Foto de perfil</span>
+                            <span style="font-size: 11px; color: var(--text-secondary);">Formatos permitidos: JPG, PNG, WEBP. Máx: 2 MB. Se recortará en formato cuadrado.</span>
+                            <div style="display: flex; gap: 8px; margin-top: 4px;">
+                                <button type="button" class="btn btn-secondary btn-small" id="btn-profile-upload-trigger" style="font-size: 11px; padding: 4px 10px;">Subir foto</button>
+                                <button type="button" class="btn btn-secondary btn-small text-red" id="btn-profile-delete-photo" style="font-size: 11px; padding: 4px 10px; border-color: var(--color-red-light); color: var(--color-red-hover); background-color: var(--color-red-light); display: none;">Eliminar foto</button>
+                            </div>
+                            <!-- Input File Oculto -->
+                            <input type="file" id="profile-file-input" accept="image/jpeg,image/jpg,image/png,image/webp" style="display: none;">
+                        </div>
+                    </div>
+
+                    <!-- Campos del Perfil -->
+                    <div style="display: flex; flex-direction: column; gap: 14px;">
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+                            <label for="profile-name" style="font-size: 12px; font-weight: 700; color: var(--text-primary);">Nombre Completo *</label>
+                            <input type="text" id="profile-name" class="large-conversational-input" style="font-size: 13px; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color); outline: none; width: 100%;">
+                        </div>
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+                            <label for="profile-email" style="font-size: 12px; font-weight: 700; color: var(--text-primary);">Correo Electrónico *</label>
+                            <input type="email" id="profile-email" class="large-conversational-input" style="font-size: 13px; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color); outline: none; width: 100%;">
+                        </div>
+                    </div>
+
+                    <!-- Metadatos de Lectura -->
+                    <div style="border-top: 1px solid var(--border-color); padding-top: 14px; margin-top: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; font-size: 12px;">
+                        <div>
+                            <span style="color: var(--text-secondary); display: block; font-size: 10.5px; font-weight: 600; text-transform: uppercase;">Rol de Acceso</span>
+                            <span id="profile-meta-rol" class="badge-modulo" style="margin-top: 2px; display: inline-block;">INVITADO</span>
+                        </div>
+                        <div>
+                            <span style="color: var(--text-secondary); display: block; font-size: 10.5px; font-weight: 600; text-transform: uppercase;">Estado de Cuenta</span>
+                            <span id="profile-meta-status" style="font-weight: 700; color: var(--color-green); display: block; margin-top: 2px;">🟢 Activa</span>
+                        </div>
+                        <div>
+                            <span style="color: var(--text-secondary); display: block; font-size: 10.5px; font-weight: 600; text-transform: uppercase;">Fecha de Registro</span>
+                            <strong id="profile-meta-fecha-registro" style="color: var(--text-primary); font-weight: 600; display: block; margin-top: 2px;">--</strong>
+                        </div>
+                        <div>
+                            <span style="color: var(--text-secondary); display: block; font-size: 10.5px; font-weight: 600; text-transform: uppercase;">Último Acceso</span>
+                            <strong id="profile-meta-ultimo-acceso" style="color: var(--text-primary); font-weight: 600; display: block; margin-top: 2px;">--</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Columna Derecha: Seguridad y Contraseña -->
+                <div style="display: flex; flex-direction: column; gap: 20px; border-left: 1px solid var(--border-color); padding-left: 28px;">
+                    <h4 style="font-size: 13.5px; font-weight: 700; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.03em; border-left: 3px solid var(--color-primary); padding-left: 8px;">Seguridad de la Cuenta</h4>
+                    
+                    <div style="display: flex; flex-direction: column; gap: 14px;">
+                        <!-- Contraseña Actual -->
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+                            <label for="profile-pass-current" style="font-size: 12px; font-weight: 700; color: var(--text-primary);">Contraseña Actual</label>
+                            <div class="input-wrapper" style="position: relative; display: flex; align-items: center;">
+                                <input type="password" id="profile-pass-current" placeholder="••••••••" style="font-size: 13px; padding: 8px 36px 8px 12px; border-radius: 6px; border: 1px solid var(--border-color); outline: none; width: 100%;">
+                                <button type="button" class="toggle-password-btn" data-input-id="profile-pass-current" style="position: absolute; right: 8px; background: none; border: none; cursor: pointer; color: var(--text-secondary); display: flex; align-items: center; justify-content: center; outline: none; padding: 4px;">👁️</button>
+                            </div>
+                        </div>
+
+                        <!-- Nueva Contraseña -->
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+                            <label for="profile-pass-new" style="font-size: 12px; font-weight: 700; color: var(--text-primary);">Nueva Contraseña</label>
+                            <div class="input-wrapper" style="position: relative; display: flex; align-items: center;">
+                                <input type="password" id="profile-pass-new" placeholder="Min. 8 caracteres" style="font-size: 13px; padding: 8px 36px 8px 12px; border-radius: 6px; border: 1px solid var(--border-color); outline: none; width: 100%;">
+                                <button type="button" class="toggle-password-btn" data-input-id="profile-pass-new" style="position: absolute; right: 8px; background: none; border: none; cursor: pointer; color: var(--text-secondary); display: flex; align-items: center; justify-content: center; outline: none; padding: 4px;">👁️</button>
+                            </div>
+                            
+                            <!-- Medidor de Fortaleza Visual -->
+                            <div style="margin-top: 6px;" id="profile-strength-container">
+                                <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin-bottom: 4px;">
+                                    <span style="color: var(--text-secondary);">Fortaleza de la clave:</span>
+                                    <strong id="profile-pass-strength-label" style="color: var(--text-light);">No ingresada</strong>
+                                </div>
+                                <div style="height: 5px; width: 100%; background-color: var(--border-color); border-radius: 3px; overflow: hidden; display: flex; gap: 2px;">
+                                    <div id="strength-bar-1" style="flex: 1; height: 100%; transition: background-color 0.2s ease;"></div>
+                                    <div id="strength-bar-2" style="flex: 1; height: 100%; transition: background-color 0.2s ease;"></div>
+                                    <div id="strength-bar-3" style="flex: 1; height: 100%; transition: background-color 0.2s ease;"></div>
+                                </div>
+                                <small style="font-size: 10.5px; color: var(--text-secondary); display: block; margin-top: 6px; line-height: 1.3;">Debe contener al menos: 1 mayúscula, 1 minúscula y 1 número.</small>
+                            </div>
+                        </div>
+
+                        <!-- Confirmar Nueva Contraseña -->
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+                            <label for="profile-pass-confirm" style="font-size: 12px; font-weight: 700; color: var(--text-primary);">Confirmar Nueva Contraseña</label>
+                            <div class="input-wrapper" style="position: relative; display: flex; align-items: center;">
+                                <input type="password" id="profile-pass-confirm" placeholder="••••••••" style="font-size: 13px; padding: 8px 36px 8px 12px; border-radius: 6px; border: 1px solid var(--border-color); outline: none; width: 100%;">
+                                <button type="button" class="toggle-password-btn" data-input-id="profile-pass-confirm" style="position: absolute; right: 8px; background: none; border: none; cursor: pointer; color: var(--text-secondary); display: flex; align-items: center; justify-content: center; outline: none; padding: 4px;">👁️</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content: flex-end; gap:12px; padding: 16px 20px; border-top: 1px solid var(--border-color);">
+                <button type="button" class="btn btn-secondary" id="btn-cancel-profile-edit">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="btn-save-profile" style="display: inline-flex; align-items: center; gap: 8px; font-weight: 600;">Guardar cambios</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL DE CONFIRMACIÓN DE CERRAR SESIÓN -->
+    <div class="modal-overlay" id="logout-confirm-modal">
+        <div class="modal-card card" style="max-width: 400px;">
+            <div class="modal-header border-bottom">
+                <h3 style="color: var(--text-primary); font-weight:800; font-size:16px;">¿Cerrar Sesión?</h3>
+                <button class="btn-close-modal" id="btn-close-logout-confirm-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:13.5px; color: var(--text-secondary); line-height: 1.4;">¿Está seguro de que desea salir del sistema de monitoreo del Semáforo Hídrico?</p>
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content: flex-end; gap:12px; padding: 16px 20px;">
+                <button type="button" class="btn btn-secondary" id="btn-cancel-logout">Cancelar</button>
+                <a href="logout.php" class="btn btn-primary" style="background-color: var(--color-red); border-color: var(--color-red); color: #FFFFFF; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; height: 38px; padding: 0 16px; border-radius: 6px; font-weight: 600; font-size: 13px;">Salir del Sistema</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- CONTENEDOR DE NOTIFICACIONES TOAST -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Script de aplicación -->
+    <script src="assets/js/app.js?v=1.0.3"></script>
+</body>
+</html>

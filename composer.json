@@ -1,0 +1,8 @@
+{
+    "name": "semaforo/hidrico",
+    "description": "Sistema de Monitoreo Semáforo Hídrico",
+    "type": "project",
+    "require": {
+        "php": ">=8.0"
+    }
+}
