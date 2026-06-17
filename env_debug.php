@@ -1,16 +1,19 @@
 <?php
+header('Content-Type: text/plain; charset=utf-8');
 
-header('Content-Type: text/plain');
+// Incluir config/database.php para cargar getRailwayEnv()
+require_once __DIR__ . '/config/database.php';
 
-echo "=== _ENV ===\n";
-print_r($_ENV);
+echo "--- GETENV() DIRECTO ---\n";
+echo "MYSQLHOST: " . (getenv('MYSQLHOST') !== false ? getenv('MYSQLHOST') : 'NO_DEFINIDA') . "\n";
+echo "MYSQLPORT: " . (getenv('MYSQLPORT') !== false ? getenv('MYSQLPORT') : 'NO_DEFINIDA') . "\n";
+echo "MYSQLDATABASE: " . (getenv('MYSQLDATABASE') !== false ? getenv('MYSQLDATABASE') : 'NO_DEFINIDA') . "\n";
+echo "MYSQLUSER: " . (getenv('MYSQLUSER') !== false ? getenv('MYSQLUSER') : 'NO_DEFINIDA') . "\n";
 
-echo "\n=== _SERVER ===\n";
-print_r(array_filter($_SERVER, function($k){
-    return strpos($k,'MYSQL') !== false
-        || strpos($k,'RAILWAY') !== false
-        || strpos($k,'PRUEBA') !== false;
-}, ARRAY_FILTER_USE_KEY));
-
-echo "\n=== getenv(PRUEBA) ===\n";
-var_dump(getenv('PRUEBA'));
+echo "\n--- DETECCION ROBUSTA (getRailwayEnv) ---\n";
+echo "MYSQLHOST: " . (getRailwayEnv('MYSQLHOST') !== null ? getRailwayEnv('MYSQLHOST') : 'NO_DEFINIDA') . "\n";
+echo "MYSQLPORT: " . (getRailwayEnv('MYSQLPORT') !== null ? getRailwayEnv('MYSQL_PORT') : 'NO_DEFINIDA') . "\n";
+echo "MYSQLDATABASE: " . (getRailwayEnv('MYSQLDATABASE') !== null ? getRailwayEnv('MYSQL_DATABASE') : 'NO_DEFINIDA') . "\n";
+echo "MYSQLUSER: " . (getRailwayEnv('MYSQLUSER') !== null ? getRailwayEnv('MYSQL_USER') : 'NO_DEFINIDA') . "\n";
+echo "MYSQL_URL: " . (getRailwayEnv('MYSQL_URL') !== null ? 'DEFINIDA (MASCARADA)' : 'NO_DEFINIDA') . "\n";
+echo "MYSQL_PUBLIC_URL: " . (getRailwayEnv('MYSQL_PUBLIC_URL') !== null ? 'DEFINIDA (MASCARADA)' : 'NO_DEFINIDA') . "\n";

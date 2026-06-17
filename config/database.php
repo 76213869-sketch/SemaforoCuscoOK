@@ -1,14 +1,94 @@
 <?php
 // Configuración de base de datos MySQL con soporte de entorno Railway
 
-// Resolver las variables del entorno de Railway exclusivamente usando getenv()
-$host = getenv('MYSQLHOST');
-$port = getenv('MYSQLPORT');
-$dbname = getenv('MYSQLDATABASE');
-$user = getenv('MYSQLUSER');
-$password = getenv('MYSQLPASSWORD');
+if (!function_exists('getRailwayEnv')) {
+    /**
+     * Obtiene de forma robusta una variable de entorno, buscando en getenv(),
+     * $_ENV, $_SERVER y leyendo directamente /proc/self/environ en entornos Linux.
+     */
+    function getRailwayEnv($key) {
+        $val = getenv($key);
+        if ($val !== false && $val !== '') {
+            return $val;
+        }
+        if (isset($_ENV[$key]) && $_ENV[$key] !== '') {
+            return $_ENV[$key];
+        }
+        if (isset($_SERVER[$key]) && $_SERVER[$key] !== '') {
+            return $_SERVER[$key];
+        }
+        
+        static $procEnv = null;
+        if ($procEnv === null) {
+            $procEnv = [];
+            if (strtoupper(substr(PHP_OS, 0, 3)) !== 'WIN' && @file_exists('/proc/self/environ')) {
+                $data = @file_get_contents('/proc/self/environ');
+                if ($data) {
+                    $parts = explode("\0", $data);
+                    foreach ($parts as $part) {
+                        if (strpos($part, '=') !== false) {
+                            list($k, $v) = explode('=', $part, 2);
+                            $procEnv[$k] = $v;
+                        }
+                    }
+                }
+            }
+        }
+        return $procEnv[$key] ?? null;
+    }
+}
 
-$is_railway = ($host !== null && $host !== false && $host !== '');
+// Resolver las variables del entorno de Railway de forma robusta
+$host = getRailwayEnv('MYSQLHOST') ?: getRailwayEnv('MYSQL_HOST');
+$port = getRailwayEnv('MYSQLPORT') ?: getRailwayEnv('MYSQL_PORT');
+$dbname = getRailwayEnv('MYSQLDATABASE') ?: getRailwayEnv('MYSQL_DATABASE');
+$user = getRailwayEnv('MYSQLUSER') ?: getRailwayEnv('MYSQL_USER');
+$password = getRailwayEnv('MYSQLPASSWORD');
+if ($password === null || $password === false || $password === '') {
+    $password = getRailwayEnv('MYSQL_PASSWORD');
+}
+
+$using_url = false;
+$url_var = 'NINGUNA';
+
+// Si no existen variables individuales, intentar extraer desde MYSQL_URL o MYSQL_PUBLIC_URL
+if (empty($host)) {
+    $mysql_url = getRailwayEnv('MYSQL_URL');
+    if (!empty($mysql_url)) {
+        $using_url = true;
+        $url_var = 'MYSQL_URL';
+    } else {
+        $mysql_url = getRailwayEnv('MYSQL_PUBLIC_URL');
+        if (!empty($mysql_url)) {
+            $using_url = true;
+            $url_var = 'MYSQL_PUBLIC_URL';
+        }
+    }
+    
+    if ($using_url) {
+        $parsed = parse_url($mysql_url);
+        if ($parsed && isset($parsed['host'])) {
+            $host = $parsed['host'];
+            $port = $parsed['port'] ?? '3306';
+            $user = $parsed['user'] ?? '';
+            $password = $parsed['pass'] ?? '';
+            $dbname = isset($parsed['path']) ? ltrim($parsed['path'], '/') : '';
+            if ($dbname && strpos($dbname, '?') !== false) {
+                $dbname = explode('?', $dbname)[0];
+            }
+        }
+    }
+}
+
+// Si sigue vacío, lanzar excepción descriptiva indicando qué variable falta
+if (empty($host)) {
+    throw new Exception(
+        "Error de configuración: Faltan las variables de entorno de conexión a la base de datos de Railway. " .
+        "No se detectaron variables individuales (MYSQLHOST/MYSQL_HOST) ni URLs de conexión (MYSQL_URL/MYSQL_PUBLIC_URL) en el entorno."
+    );
+}
+
+$is_railway = ($host !== null && $host !== '');
 
 // Definición de constantes para compatibilidad con el resto del proyecto
 if (!defined('DB_HOST')) define('DB_HOST', $host);
@@ -16,8 +96,8 @@ if (!defined('DB_USER')) define('DB_USER', $user);
 if (!defined('DB_PASS')) define('DB_PASS', $password);
 if (!defined('DB_NAME')) define('DB_NAME', $dbname);
 if (!defined('DB_PORT')) define('DB_PORT', $port);
-if (!defined('DB_USING_URL')) define('DB_USING_URL', false);
-if (!defined('DB_URL_VAR')) define('DB_URL_VAR', 'NINGUNA');
+if (!defined('DB_USING_URL')) define('DB_USING_URL', $using_url);
+if (!defined('DB_URL_VAR')) define('DB_URL_VAR', $url_var);
 if (!defined('DB_IS_RAILWAY')) define('DB_IS_RAILWAY', $is_railway);
 
 /**
@@ -27,16 +107,17 @@ if (!defined('DB_IS_RAILWAY')) define('DB_IS_RAILWAY', $is_railway);
 function getDatabaseConnection() {
     try {
         // Log environment variables before connection attempt
-        $rawHost = getenv('MYSQLHOST');
-        $rawPort = getenv('MYSQLPORT');
-        $rawDb = getenv('MYSQLDATABASE');
-        $rawUser = getenv('MYSQLUSER');
-        $rawPass = getenv('MYSQLPASSWORD');
+        $rawHost = getRailwayEnv('MYSQLHOST') ?: getRailwayEnv('MYSQL_HOST');
+        $rawPort = getRailwayEnv('MYSQLPORT') ?: getRailwayEnv('MYSQL_PORT');
+        $rawDb = getRailwayEnv('MYSQLDATABASE') ?: getRailwayEnv('MYSQL_DATABASE');
+        $rawUser = getRailwayEnv('MYSQLUSER') ?: getRailwayEnv('MYSQL_USER');
+        $rawUrl = getRailwayEnv('MYSQL_URL') ?: getRailwayEnv('MYSQL_PUBLIC_URL');
         
         error_log("[PDO ATTEMPT] DSN: mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME);
         error_log("[PDO ATTEMPT] DB_USER: " . DB_USER);
-        error_log("[PDO ATTEMPT] Raw Env Values - MYSQLHOST: " . ($rawHost !== false ? $rawHost : 'NULL') . ", MYSQLPORT: " . ($rawPort !== false ? $rawPort : 'NULL') . ", MYSQLDATABASE: " . ($rawDb !== false ? $rawDb : 'NULL') . ", MYSQLUSER: " . ($rawUser !== false ? $rawUser : 'NULL') . ", MYSQLPASSWORD: " . ($rawPass !== false ? 'DEFINED' : 'NULL'));
+        error_log("[PDO ATTEMPT] Env State - MYSQLHOST: " . ($rawHost ?? 'NULL') . ", MYSQLPORT: " . ($rawPort ?? 'NULL') . ", MYSQLDATABASE: " . ($rawDb ?? 'NULL') . ", MYSQLUSER: " . ($rawUser ?? 'NULL') . ", MYSQL_URL: " . ($rawUrl !== null ? 'DEFINED' : 'NULL'));
 
+        // Forzar conexión TCP especificando host y port en el DSN
         $dsn = "mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=utf8mb4";
         $pdo = new PDO($dsn, DB_USER, DB_PASS, [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
@@ -152,11 +233,12 @@ function getDatabaseConnection() {
      } catch (PDOException $e) {
         // Diagnóstico detallado si falla la conexión
         $envState = [
-            'MYSQLHOST' => (getenv('MYSQLHOST') !== false) ? 'DETECTADA (' . getenv('MYSQLHOST') . ')' : 'NO_DETECTADA',
-            'MYSQLPORT' => (getenv('MYSQLPORT') !== false) ? 'DETECTADA (' . getenv('MYSQLPORT') . ')' : 'NO_DETECTADA',
-            'MYSQLDATABASE' => (getenv('MYSQLDATABASE') !== false) ? 'DETECTADA (' . getenv('MYSQLDATABASE') . ')' : 'NO_DETECTADA',
-            'MYSQLUSER' => (getenv('MYSQLUSER') !== false) ? 'DETECTADA (' . getenv('MYSQLUSER') . ')' : 'NO_DETECTADA',
-            'MYSQLPASSWORD' => (getenv('MYSQLPASSWORD') !== false) ? 'DETECTADA (MASCARADA)' : 'NO_DETECTADA'
+            'MYSQLHOST' => (getRailwayEnv('MYSQLHOST') !== null || getRailwayEnv('MYSQL_HOST') !== null) ? 'DETECTADA' : 'NO_DETECTADA',
+            'MYSQLPORT' => (getRailwayEnv('MYSQLPORT') !== null || getRailwayEnv('MYSQL_PORT') !== null) ? 'DETECTADA' : 'NO_DETECTADA',
+            'MYSQLDATABASE' => (getRailwayEnv('MYSQLDATABASE') !== null || getRailwayEnv('MYSQL_DATABASE') !== null) ? 'DETECTADA' : 'NO_DETECTADA',
+            'MYSQLUSER' => (getRailwayEnv('MYSQLUSER') !== null || getRailwayEnv('MYSQL_USER') !== null) ? 'DETECTADA' : 'NO_DETECTADA',
+            'MYSQL_URL' => (getRailwayEnv('MYSQL_URL') !== null) ? 'DETECTADA' : 'NO_DETECTADA',
+            'MYSQL_PUBLIC_URL' => (getRailwayEnv('MYSQL_PUBLIC_URL') !== null) ? 'DETECTADA' : 'NO_DETECTADA'
         ];
         
         $diagMsg = "\n[DIAGNÓSTICO TEMPORAL DE CONEXIÓN]:\n";
@@ -164,8 +246,8 @@ function getDatabaseConnection() {
         $diagMsg .= "- Evaluado Puerto (DB_PORT): " . (defined('DB_PORT') ? DB_PORT : 'NULL') . "\n";
         $diagMsg .= "- Evaluado DB Name (DB_NAME): " . (defined('DB_NAME') ? DB_NAME : 'NULL') . "\n";
         $diagMsg .= "- Evaluado Usuario (DB_USER): " . (defined('DB_USER') ? DB_USER : 'NULL') . "\n";
-        $diagMsg .= "- Origen detectado de Railway: " . (DB_IS_RAILWAY ? 'SI' : 'NO') . "\n";
-        $diagMsg .= "- Estado de variables de entorno individuales:\n";
+        $diagMsg .= "- Usando MYSQL_URL: " . (DB_USING_URL ? 'SI (' . DB_URL_VAR . ')' : 'NO') . "\n";
+        $diagMsg .= "- Estado de variables de entorno:\n";
         foreach ($envState as $k => $v) {
             $diagMsg .= "  * {$k} = {$v}\n";
         }
