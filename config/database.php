@@ -1,23 +1,50 @@
 <?php
-// Configuración de base de datos MySQL para Laragon
-define('DB_HOST', getenv('MYSQLHOST') ?: 'localhost');
-define('DB_USER', getenv('MYSQLUSER') ?: 'root');
-define('DB_PASS', getenv('MYSQLPASSWORD') !== false ? getenv('MYSQLPASSWORD') : '');
-define('DB_NAME', getenv('MYSQLDATABASE') ?: 'semaforo_hidrico');
-define('DB_PORT', getenv('MYSQLPORT') ?: '3306');
+// Configuración de base de datos MySQL con soporte de entorno Railway y fallback local
+
+// Leer variables de entorno (Railway) o fallbacks
+$host = getenv('MYSQLHOST') ?: ($_ENV['MYSQLHOST'] ?? ($_SERVER['MYSQLHOST'] ?? null));
+$port = getenv('MYSQLPORT') ?: ($_ENV['MYSQLPORT'] ?? ($_SERVER['MYSQLPORT'] ?? null));
+$dbname = getenv('MYSQLDATABASE') ?: ($_ENV['MYSQLDATABASE'] ?? ($_SERVER['MYSQLDATABASE'] ?? null));
+$user = getenv('MYSQLUSER') ?: ($_ENV['MYSQLUSER'] ?? ($_SERVER['MYSQLUSER'] ?? null));
+$password = getenv('MYSQLPASSWORD') !== false ? getenv('MYSQLPASSWORD') : ($_ENV['MYSQLPASSWORD'] ?? ($_SERVER['MYSQLPASSWORD'] ?? null));
+
+$isRailway = ($host !== null);
+
+// Si no está en Railway, aplicar fallbacks locales seguros
+if (!$isRailway) {
+    $host = '127.0.0.1'; // Forzar TCP local en vez de localhost para evitar sockets Unix/Pipe
+    $port = '3306';
+    $dbname = 'semaforo_hidrico';
+    $user = 'root';
+    $password = '';
+} else {
+    // Si en Railway por alguna razón se entrega 'localhost', forzar a '127.0.0.1' para evitar socket Unix
+    if (strtolower($host) === 'localhost') {
+        $host = '127.0.0.1';
+    }
+}
+
+// Definición de constantes para compatibilidad con el resto del proyecto
+if (!defined('DB_HOST')) define('DB_HOST', $host);
+if (!defined('DB_USER')) define('DB_USER', $user);
+if (!defined('DB_PASS')) define('DB_PASS', $password);
+if (!defined('DB_NAME')) define('DB_NAME', $dbname);
+if (!defined('DB_PORT')) define('DB_PORT', $port);
 
 /**
  * Retorna una conexión PDO a la base de datos MySQL.
- * Si la base de datos no existe, intenta crearla y ejecutar database.sql.
+ * Si las tablas no existen, las inicializa automáticamente desde database.sql.
  */
 function getDatabaseConnection() {
     try {
-        // Intentar conexión normal
-        $pdo = new PDO("mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=utf8", DB_USER, DB_PASS);
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        $dsn = "mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=utf8mb4";
+        
+        $pdo = new PDO($dsn, DB_USER, DB_PASS, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+        ]);
 
-        // Verificar si la tabla 'usuarios' existe. Si no, inicializar la base de datos con database.sql
+        // Verificar si la tabla 'usuarios' existe en la base de datos
         $tablesExist = false;
         try {
             $stmt = $pdo->query("SELECT 1 FROM usuarios LIMIT 1");
@@ -26,12 +53,15 @@ function getDatabaseConnection() {
             $tablesExist = false;
         }
 
+        // Si la tabla 'usuarios' no existe, inicializar el esquema completo
         if (!$tablesExist) {
             $sqlPath = __DIR__ . '/../database.sql';
             if (file_exists($sqlPath)) {
                 $sqlContent = file_get_contents($sqlPath);
+                // Sanitizar script SQL eliminando comandos CREATE DATABASE y USE
                 $sqlContent = preg_replace('/CREATE DATABASE IF NOT EXISTS.*?;/i', '', $sqlContent);
                 $sqlContent = preg_replace('/USE .*?;/i', '', $sqlContent);
+                
                 $pdo->exec($sqlContent);
             }
         }
@@ -53,7 +83,7 @@ function getDatabaseConnection() {
                     accion VARCHAR(100) NOT NULL,
                     descripcion TEXT NOT NULL,
                     fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             ");
         } catch (PDOException $exTable) {
             // Ignorar
@@ -61,14 +91,12 @@ function getDatabaseConnection() {
         
         // Asegurar la migración de usuarios al nuevo esquema de roles y columnas activo/ultimo_acceso
         try {
-            // 1. Primero, expandir el ENUM temporalmente para permitir todos los roles (antiguos y nuevos)
             try {
                 $pdo->exec("ALTER TABLE usuarios MODIFY COLUMN rol ENUM('ADMINISTRADOR', 'BRIGADA', 'VECINO', 'OPERADOR', 'INVITADO') NOT NULL DEFAULT 'INVITADO'");
             } catch (PDOException $e) {
                 // Ignorar
             }
 
-            // 2. Mapear roles antiguos a nuevos
             try {
                 $pdo->exec("UPDATE usuarios SET rol = 'OPERADOR' WHERE rol = 'BRIGADA'");
                 $pdo->exec("UPDATE usuarios SET rol = 'INVITADO' WHERE rol = 'VECINO'");
@@ -76,35 +104,31 @@ function getDatabaseConnection() {
                 // Ignorar
             }
 
-            // 3. Restringir la columna de rol a los valores finales deseados
             try {
                 $pdo->exec("ALTER TABLE usuarios MODIFY COLUMN rol ENUM('ADMINISTRADOR', 'OPERADOR', 'INVITADO') NOT NULL DEFAULT 'INVITADO'");
             } catch (PDOException $e) {
                 // Ignorar
             }
 
-            // 3. Agregar columna activo
             try {
                 $pdo->exec("ALTER TABLE usuarios ADD COLUMN activo TINYINT DEFAULT 1");
             } catch (PDOException $e) {
                 // Ignorar
             }
 
-            // 4. Agregar columna ultimo_acceso
             try {
                 $pdo->exec("ALTER TABLE usuarios ADD COLUMN ultimo_acceso DATETIME NULL");
             } catch (PDOException $e) {
                 // Ignorar
             }
 
-            // Agregar columna foto_perfil
             try {
                 $pdo->exec("ALTER TABLE usuarios ADD COLUMN foto_perfil VARCHAR(255) NULL DEFAULT NULL");
             } catch (PDOException $e) {
                 // Ignorar
             }
 
-            // 5. Asegurar usuario admin semilla
+            // Asegurar usuario admin semilla
             $stmtCheckAdmin = $pdo->prepare("SELECT COUNT(*) FROM usuarios WHERE correo = ?");
             $stmtCheckAdmin->execute(['admin@semaforo.pe']);
             $adminExists = (int)$stmtCheckAdmin->fetchColumn();
@@ -114,7 +138,6 @@ function getDatabaseConnection() {
                 $stmtInsertAdmin->execute(['Administrador', 'admin@semaforo.pe', $hashedPass]);
             }
             
-            // Asegurar que el primer usuario (Comité) tenga rol ADMINISTRADOR si no lo tiene
             try {
                 $pdo->exec("UPDATE usuarios SET rol = 'ADMINISTRADOR' WHERE id = 1 AND rol != 'ADMINISTRADOR'");
             } catch (PDOException $e) {
@@ -122,58 +145,31 @@ function getDatabaseConnection() {
             }
 
         } catch (PDOException $exMigrate) {
-            // Ignorar errores menores de migración
+            // Ignorar
         }
 
         return $pdo;
+
     } catch (PDOException $e) {
-        // Código 1049: Base de datos desconocida (Database doesn't exist)
-        if ($e->getCode() == 1049 || strpos($e->getMessage(), 'Unknown database') !== false) {
-            try {
-                // Conectar sin especificar base de datos
-                $tempPdo = new PDO("mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";charset=utf8", DB_USER, DB_PASS);
-                $tempPdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-                
-                // Crear base de datos
-                $tempPdo->exec("CREATE DATABASE IF NOT EXISTS " . DB_NAME . " CHARACTER SET utf8 COLLATE utf8_general_ci");
-                
-                // Conectar a la base de datos recién creada
-                $pdo = new PDO("mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=utf8", DB_USER, DB_PASS);
-                $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-                $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-                
-                // Buscar y ejecutar el script database.sql
-                $sqlPath = __DIR__ . '/../database.sql';
-                if (file_exists($sqlPath)) {
-                    $sqlContent = file_get_contents($sqlPath);
-                    
-                    // Quitar instrucciones de creación de base de datos si ya las ejecutamos
-                    // pero para mayor seguridad, limpiamos los comandos USE y ejecutamos todo el script
-                    $tempPdo = null; // Cerrar la conexión temporal
-                    $sqlContent = preg_replace('/CREATE DATABASE IF NOT EXISTS.*?;/i', '', $sqlContent);
-                    $sqlContent = preg_replace('/USE .*?;/i', '', $sqlContent);
-                    
-                    // Ejecutar el script SQL
-                    $pdo->exec($sqlContent);
-                }
-                
-                return $pdo;
-            } catch (Exception $ex) {
-                header('Content-Type: application/json; charset=utf-8');
-                http_response_code(500);
-                echo json_encode([
-                    'error' => 'No se pudo crear e inicializar la base de datos: ' . $ex->getMessage()
-                ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
-                exit;
-            }
-        } else {
-            header('Content-Type: application/json; charset=utf-8');
-            http_response_code(500);
-            echo json_encode([
-                'error' => 'Error de conexión a la base de datos: ' . $e->getMessage()
-            ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
-            exit;
-        }
+        // Diagnóstico detallado si falla la conexión
+        $envState = [
+            'MYSQLHOST' => getenv('MYSQLHOST') !== false ? 'DEFINIDA' : 'NO_DEFINIDA',
+            'MYSQLPORT' => getenv('MYSQLPORT') !== false ? 'DEFINIDA' : 'NO_DEFINIDA',
+            'MYSQLDATABASE' => getenv('MYSQLDATABASE') !== false ? 'DEFINIDA' : 'NO_DEFINIDA',
+            'MYSQLUSER' => getenv('MYSQLUSER') !== false ? 'DEFINIDA' : 'NO_DEFINIDA',
+            'MYSQLPASSWORD' => getenv('MYSQLPASSWORD') !== false ? 'DEFINIDA' : 'NO_DEFINIDA'
+        ];
+        
+        $diagMsg = "\n[DIAGNÓSTICO TEMPORAL DE CONEXIÓN]:\n";
+        $diagMsg .= "- Evaluado Host (DB_HOST): " . (DB_HOST ?? 'NULL') . "\n";
+        $diagMsg .= "- Evaluado Puerto (DB_PORT): " . (DB_PORT ?? 'NULL') . "\n";
+        $diagMsg .= "- Evaluado DB Name (DB_NAME): " . (DB_NAME ?? 'NULL') . "\n";
+        $diagMsg .= "- Evaluado Usuario (DB_USER): " . (DB_USER ?? 'NULL') . "\n";
+        $diagMsg .= "- Entorno Railway Detectado: " . (getenv('MYSQLHOST') !== false ? 'SI' : 'NO') . "\n";
+        $diagMsg .= "- Variables de Entorno de Railway: " . json_encode($envState) . "\n";
+        
+        // Lanzar una excepción con el diagnóstico incorporado para el log del servidor y para el front
+        throw new Exception($e->getMessage() . $diagMsg, (int)$e->getCode(), $e);
     }
 }
 
