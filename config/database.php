@@ -1,24 +1,64 @@
 <?php
 // Configuración de base de datos MySQL con soporte de entorno Railway y fallback local
 
-// Leer variables de entorno (Railway) o fallbacks
-$host = getenv('MYSQLHOST') ?: ($_ENV['MYSQLHOST'] ?? ($_SERVER['MYSQLHOST'] ?? null));
-$port = getenv('MYSQLPORT') ?: ($_ENV['MYSQLPORT'] ?? ($_SERVER['MYSQLPORT'] ?? null));
-$dbname = getenv('MYSQLDATABASE') ?: ($_ENV['MYSQLDATABASE'] ?? ($_SERVER['MYSQLDATABASE'] ?? null));
-$user = getenv('MYSQLUSER') ?: ($_ENV['MYSQLUSER'] ?? ($_SERVER['MYSQLUSER'] ?? null));
-$password = getenv('MYSQLPASSWORD') !== false ? getenv('MYSQLPASSWORD') : ($_ENV['MYSQLPASSWORD'] ?? ($_SERVER['MYSQLPASSWORD'] ?? null));
+if (!function_exists('getRailwayEnv')) {
+    /**
+     * Obtiene de forma robusta una variable de entorno, buscando en getenv(),
+     * $_ENV, $_SERVER y leyendo directamente /proc/self/environ en entornos Linux.
+     */
+    function getRailwayEnv($key) {
+        // 1. Intentar getenv()
+        $val = getenv($key);
+        if ($val !== false && $val !== '') {
+            return $val;
+        }
+        // 2. Intentar $_ENV
+        if (isset($_ENV[$key]) && $_ENV[$key] !== '') {
+            return $_ENV[$key];
+        }
+        // 3. Intentar $_SERVER
+        if (isset($_SERVER[$key]) && $_SERVER[$key] !== '') {
+            return $_SERVER[$key];
+        }
+        
+        // 4. Fallback extremo: Leer /proc/self/environ en Linux (para evadir clear_env = yes en PHP-FPM)
+        static $procEnv = null;
+        if ($procEnv === null) {
+            $procEnv = [];
+            if (strtoupper(substr(PHP_OS, 0, 3)) !== 'WIN' && @file_exists('/proc/self/environ')) {
+                $data = @file_get_contents('/proc/self/environ');
+                if ($data) {
+                    $parts = explode("\0", $data);
+                    foreach ($parts as $part) {
+                        if (strpos($part, '=') !== false) {
+                            list($k, $v) = explode('=', $part, 2);
+                            $procEnv[$k] = $v;
+                        }
+                    }
+                }
+            }
+        }
+        
+        return $procEnv[$key] ?? null;
+    }
+}
 
-$isRailway = ($host !== null);
+// Resolver las variables del entorno buscando en Railway primero
+$host = getRailwayEnv('MYSQLHOST');
+$port = getRailwayEnv('MYSQLPORT');
+$dbname = getRailwayEnv('MYSQLDATABASE');
+$user = getRailwayEnv('MYSQLUSER');
+$password = getRailwayEnv('MYSQLPASSWORD');
 
-// Si no está en Railway, aplicar fallbacks locales seguros
-if (!$isRailway) {
-    $host = '127.0.0.1'; // Forzar TCP local en vez de localhost para evitar sockets Unix/Pipe
+// Si no está en Railway (no se detectó host), aplicar los fallbacks locales
+if ($host === null) {
+    $host = '127.0.0.1';
     $port = '3306';
     $dbname = 'semaforo_hidrico';
     $user = 'root';
     $password = '';
 } else {
-    // Si en Railway por alguna razón se entrega 'localhost', forzar a '127.0.0.1' para evitar socket Unix
+    // Si en Railway se entrega 'localhost', forzar a '127.0.0.1' para evitar socket Unix en Linux
     if (strtolower($host) === 'localhost') {
         $host = '127.0.0.1';
     }
