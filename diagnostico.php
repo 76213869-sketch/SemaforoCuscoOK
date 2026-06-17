@@ -105,6 +105,13 @@ if ($isCli) {
     echo "====================================================\n";
     echo "Estado del Sistema: " . ($status === 'OK' ? "SINCRO OK (100% MySQL)" : "ERROR: INCONSISTENCIA DETECTADA") . "\n";
     echo "----------------------------------------------------\n";
+    echo "Conexión a Base de Datos:\n";
+    echo "  - Origen: " . (DB_USING_URL ? "Railway URL (" . DB_URL_VAR . ")" : "Local Fallback") . "\n";
+    echo "  - Host: " . DB_HOST . "\n";
+    echo "  - Puerto: " . DB_PORT . "\n";
+    echo "  - Base de Datos: " . DB_NAME . "\n";
+    echo "  - Usuario: " . DB_USER . "\n";
+    echo "----------------------------------------------------\n";
     echo "Totales en MySQL:\n";
     echo "  - Total de Viviendas: {$countViviendas}\n";
     echo "  - Total de Mediciones: {$countAnalisis}\n";
@@ -136,6 +143,14 @@ if ($isCli) {
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode([
             'status' => $status,
+            'db_connection' => [
+                'using_url' => DB_USING_URL,
+                'url_var' => DB_URL_VAR,
+                'host' => DB_HOST,
+                'port' => DB_PORT,
+                'dbname' => DB_NAME,
+                'user' => DB_USER
+            ],
             'totales' => [
                 'viviendas' => $countViviendas,
                 'mediciones' => $countAnalisis,
@@ -215,6 +230,34 @@ if ($isCli) {
                     <div class="label">Alertas Activas</div>
                 </div>
             </div>
+
+            <h2>Estado de Conexión a Base de Datos</h2>
+            <table>
+                <tr>
+                    <th>Parámetro</th>
+                    <th>Valor</th>
+                </tr>
+                <tr>
+                    <td>Origen de Configuración</td>
+                    <td><strong><?php echo DB_USING_URL ? 'Railway URL (' . htmlspecialchars(DB_URL_VAR) . ')' : 'Configuración Local (Fallback)'; ?></strong></td>
+                </tr>
+                <tr>
+                    <td>Host de Base de Datos</td>
+                    <td><?php echo htmlspecialchars(DB_HOST); ?></td>
+                </tr>
+                <tr>
+                    <td>Puerto</td>
+                    <td><?php echo htmlspecialchars(DB_PORT); ?></td>
+                </tr>
+                <tr>
+                    <td>Nombre de Base de Datos</td>
+                    <td><?php echo htmlspecialchars(DB_NAME); ?></td>
+                </tr>
+                <tr>
+                    <td>Usuario</td>
+                    <td><?php echo htmlspecialchars(DB_USER); ?></td>
+                </tr>
+            </table>
             
             <h2>Desglose de Calidad de Viviendas</h2>
             <table>

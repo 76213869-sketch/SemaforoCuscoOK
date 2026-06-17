@@ -43,15 +43,33 @@ if (!function_exists('getRailwayEnv')) {
     }
 }
 
-// Resolver las variables del entorno buscando en Railway primero
-$host = getRailwayEnv('MYSQLHOST');
-$port = getRailwayEnv('MYSQLPORT');
-$dbname = getRailwayEnv('MYSQLDATABASE');
-$user = getRailwayEnv('MYSQLUSER');
-$password = getRailwayEnv('MYSQLPASSWORD');
+// Resolver las variables del entorno buscando en Railway primero (detectando MYSQL_URL o MYSQL_PUBLIC_URL)
+$mysql_url = getRailwayEnv('MYSQL_URL') ?: getRailwayEnv('MYSQL_PUBLIC_URL');
+$parsed_successfully = false;
 
-// Si no está en Railway (no se detectó host), aplicar los fallbacks locales
-if ($host === null) {
+$host = null;
+$port = null;
+$dbname = null;
+$user = null;
+$password = null;
+
+if ($mysql_url) {
+    $parsed = parse_url($mysql_url);
+    if ($parsed && isset($parsed['host'])) {
+        $host = $parsed['host'];
+        $port = $parsed['port'] ?? '3306';
+        $user = $parsed['user'] ?? '';
+        $password = $parsed['pass'] ?? '';
+        $dbname = isset($parsed['path']) ? ltrim($parsed['path'], '/') : '';
+        if ($dbname && strpos($dbname, '?') !== false) {
+            $dbname = explode('?', $dbname)[0];
+        }
+        $parsed_successfully = true;
+    }
+}
+
+// Si no está en Railway o no se pudo parsear, aplicar los fallbacks locales
+if (!$parsed_successfully) {
     $host = '127.0.0.1';
     $port = '3306';
     $dbname = 'semaforo_hidrico';
@@ -70,6 +88,8 @@ if (!defined('DB_USER')) define('DB_USER', $user);
 if (!defined('DB_PASS')) define('DB_PASS', $password);
 if (!defined('DB_NAME')) define('DB_NAME', $dbname);
 if (!defined('DB_PORT')) define('DB_PORT', $port);
+if (!defined('DB_USING_URL')) define('DB_USING_URL', $parsed_successfully);
+if (!defined('DB_URL_VAR')) define('DB_URL_VAR', getRailwayEnv('MYSQL_URL') ? 'MYSQL_URL' : (getRailwayEnv('MYSQL_PUBLIC_URL') ? 'MYSQL_PUBLIC_URL' : 'NINGUNA'));
 
 /**
  * Retorna una conexión PDO a la base de datos MySQL.
@@ -190,22 +210,19 @@ function getDatabaseConnection() {
 
         return $pdo;
 
-    } catch (PDOException $e) {
+     } catch (PDOException $e) {
         // Diagnóstico detallado si falla la conexión
         $envState = [
-            'MYSQLHOST' => getenv('MYSQLHOST') !== false ? 'DEFINIDA' : 'NO_DEFINIDA',
-            'MYSQLPORT' => getenv('MYSQLPORT') !== false ? 'DEFINIDA' : 'NO_DEFINIDA',
-            'MYSQLDATABASE' => getenv('MYSQLDATABASE') !== false ? 'DEFINIDA' : 'NO_DEFINIDA',
-            'MYSQLUSER' => getenv('MYSQLUSER') !== false ? 'DEFINIDA' : 'NO_DEFINIDA',
-            'MYSQLPASSWORD' => getenv('MYSQLPASSWORD') !== false ? 'DEFINIDA' : 'NO_DEFINIDA'
+            'MYSQL_URL' => (getRailwayEnv('MYSQL_URL') !== null) ? 'DEFINIDA' : 'NO_DEFINIDA',
+            'MYSQL_PUBLIC_URL' => (getRailwayEnv('MYSQL_PUBLIC_URL') !== null) ? 'DEFINIDA' : 'NO_DEFINIDA'
         ];
         
         $diagMsg = "\n[DIAGNÓSTICO TEMPORAL DE CONEXIÓN]:\n";
-        $diagMsg .= "- Evaluado Host (DB_HOST): " . (DB_HOST ?? 'NULL') . "\n";
-        $diagMsg .= "- Evaluado Puerto (DB_PORT): " . (DB_PORT ?? 'NULL') . "\n";
-        $diagMsg .= "- Evaluado DB Name (DB_NAME): " . (DB_NAME ?? 'NULL') . "\n";
-        $diagMsg .= "- Evaluado Usuario (DB_USER): " . (DB_USER ?? 'NULL') . "\n";
-        $diagMsg .= "- Entorno Railway Detectado: " . (getenv('MYSQLHOST') !== false ? 'SI' : 'NO') . "\n";
+        $diagMsg .= "- Evaluado Host (DB_HOST): " . (defined('DB_HOST') ? DB_HOST : 'NULL') . "\n";
+        $diagMsg .= "- Evaluado Puerto (DB_PORT): " . (defined('DB_PORT') ? DB_PORT : 'NULL') . "\n";
+        $diagMsg .= "- Evaluado DB Name (DB_NAME): " . (defined('DB_NAME') ? DB_NAME : 'NULL') . "\n";
+        $diagMsg .= "- Evaluado Usuario (DB_USER): " . (defined('DB_USER') ? DB_USER : 'NULL') . "\n";
+        $diagMsg .= "- Entorno Railway Detectado (URL): " . (DB_USING_URL ? 'SI (' . DB_URL_VAR . ')' : 'NO') . "\n";
         $diagMsg .= "- Variables de Entorno de Railway: " . json_encode($envState) . "\n";
         
         // Lanzar una excepción con el diagnóstico incorporado para el log del servidor y para el front
