@@ -214,14 +214,18 @@ function getDatabaseConnection() {
                 // Ignorar
             }
 
-            // Asegurar usuario admin semilla
+            // Asegurar usuario admin semilla y resetear contraseña a admin123
             $stmtCheckAdmin = $pdo->prepare("SELECT COUNT(*) FROM usuarios WHERE correo = ?");
             $stmtCheckAdmin->execute(['admin@semaforo.pe']);
             $adminExists = (int)$stmtCheckAdmin->fetchColumn();
+            
+            $hashedPass = password_hash('admin123', PASSWORD_DEFAULT);
             if ($adminExists === 0) {
-                $hashedPass = password_hash('admin123', PASSWORD_DEFAULT);
                 $stmtInsertAdmin = $pdo->prepare("INSERT INTO usuarios (nombre, correo, password, rol, activo) VALUES (?, ?, ?, 'ADMINISTRADOR', 1)");
                 $stmtInsertAdmin->execute(['Administrador', 'admin@semaforo.pe', $hashedPass]);
+            } else {
+                $stmtUpdateAdmin = $pdo->prepare("UPDATE usuarios SET password = ? WHERE correo = ?");
+                $stmtUpdateAdmin->execute([$hashedPass, 'admin@semaforo.pe']);
             }
             
             try {
