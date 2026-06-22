@@ -1,5 +1,5 @@
 <?php
-// Configuración de base de datos MySQL con soporte de entorno Railway
+// Configuración de base de datos MySQL con soporte de entorno Railway y fallback local
 
 if (!function_exists('getRailwayEnv')) {
     /**
@@ -80,15 +80,21 @@ if (empty($host)) {
     }
 }
 
-// Si sigue vacío, lanzar excepción descriptiva indicando qué variable falta
-if (empty($host)) {
-    throw new Exception(
-        "Error de configuración: Faltan las variables de entorno de conexión a la base de datos de Railway. " .
-        "No se detectaron variables individuales (MYSQLHOST/MYSQL_HOST) ni URLs de conexión (MYSQL_URL/MYSQL_PUBLIC_URL) en el entorno."
-    );
-}
+$is_railway = ($host !== null && $host !== false && $host !== '');
 
-$is_railway = ($host !== null && $host !== '');
+// Si no se detectó entorno de Railway (ni host individual ni URL), aplicar los fallbacks locales de Laragon
+if (!$is_railway) {
+    $host = '127.0.0.1';
+    $port = '3306';
+    $dbname = 'semaforo_hidrico';
+    $user = 'root';
+    $password = '';
+} else {
+    // Si en Railway se entrega 'localhost', forzar a '127.0.0.1' para evitar socket Unix en Linux
+    if (strtolower($host) === 'localhost') {
+        $host = '127.0.0.1';
+    }
+}
 
 // Definición de constantes para compatibilidad con el resto del proyecto
 if (!defined('DB_HOST')) define('DB_HOST', $host);
